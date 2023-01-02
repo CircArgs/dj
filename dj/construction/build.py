@@ -2,76 +2,20 @@
 Functions for building queries, from nodes or SQL.
 """
 
-import ast
-import datetime
-import operator
-import re
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, cast
-
-from dateutil.parser import parse
-from sqlalchemy.engine.url import make_url
-from sqlalchemy.schema import Column as SqlaColumn
-from sqlalchemy.sql.elements import BinaryExpression
-from sqlalchemy.sql.expression import ClauseElement
-from sqlmodel import Session, select
-from sqloxide import parse_sql
-
-from dj.constants import DEFAULT_DIMENSION_COLUMN
-from dj.errors import DJError, DJInvalidInputException, ErrorCode
-from dj.models.node import Node, NodeType
-from dj.models.query import QueryCreate
-from dj.sql.dag import (
-    get_database_for_nodes,
-    get_dimensions,
-    get_referenced_columns_from_sql,
-    get_referenced_columns_from_tree,
-)
-from dj.sql.parse import (
-    find_nodes_by_key,
-    find_nodes_by_key_with_parent,
-    get_expression_from_projection,
-)
-from dj.sql.transpile import get_query, get_select_for_node
-from dj.typing import Expression, Identifier, Join, Projection, Relation, Select
-from dj.utils import get_session
-
-from typing import Union, Tuple, Optional, Iterable, Generator, Type
-
+from contextlib import contextmanager
 from functools import reduce
 from itertools import chain
-
-
-
-from dj.models import Database
-
-session = next(get_session())
-
-from dj.sql.parsing.backends.sqloxide import parse
-
-from dj.sql.parsing.ast import (
-    Node as ASTNode,
-    Query,
-    Column,
-    From,
-    Table,
-    Operation,
-    flatten,
-    Name,
-    Named,
-    Alias,
-    Select,
-    Join,
-    JoinKind,
-    BinaryOp,
-    BinaryOpKind,
-    Namespace,
-)
-
-from contextlib import contextmanager
+from string import ascii_letters, digits
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from sqlalchemy.orm.exc import NoResultFound
+from sqlmodel import Session
 
-from string import ascii_letters, digits
+from dj.models.node import Node, NodeType
+from dj.sql.parsing.ast import Alias, BinaryOp, Column, Join, Name, Named, Namespace
+from dj.sql.parsing.ast import Node as ASTNode
+from dj.sql.parsing.ast import Query, Select, Table, flatten
+from dj.sql.parsing.backends.sqloxide import parse
 
 ACCEPTABLE_CHARS = set(ascii_letters + digits + "_")
 LOOKUP_CHARS = {
@@ -116,6 +60,7 @@ def amenable_name(name: str) -> str:
 
     return "_".join(ret) + "_" + "".join(cont)
 
+
 def make_name(namespace, name="") -> str:
     """utility taking a namespace and name to make a possible name of a DJ Node"""
     ret = ""
@@ -124,6 +69,7 @@ def make_name(namespace, name="") -> str:
     if name:
         ret += ("." if ret else "") + name
     return ret
+
 
 class BuildException(Exception):
     """Generic DJ Build Exception"""
@@ -188,6 +134,7 @@ class NodeTypeException(BuildException):
             ret += f" from:\n\n `{self.context}`"
         return ret
 
+
 class CompoundBuildException(BuildException):
     _instance: Optional["CompoundBuildException"] = None
     _raise: bool = True
@@ -210,7 +157,7 @@ class CompoundBuildException(BuildException):
 
     def set_raise(self, raise_: bool):
         self._raise = raise_
-    
+
     @property
     @contextmanager
     def catch(self):
@@ -230,8 +177,11 @@ class CompoundBuildException(BuildException):
             for exc in self.errors
         )
 
+
 def get_dj_node(
-    session: Session, node_name: str, kinds: Optional[Set[NodeType]] = None
+    session: Session,
+    node_name: str,
+    kinds: Optional[Set[NodeType]] = None,
 ) -> Optional[Node]:
     """Return the DJ Node with a given name from a set of node types"""
     query = select(Node).filter(Node.name == node_name)
@@ -251,8 +201,9 @@ def get_dj_node(
                 f"Node `{match.name}` is of type `{str(match.type).upper()}`. Expected kind to be of {' or '.join(str(k) for k in kinds)}.",
                 node_name,
             )
-        
+
     return match
+
 
 from dataclasses import dataclass, field
 from itertools import chain
@@ -263,14 +214,14 @@ class ColumnDependencies:
     """Columns discovered from a query"""
 
     projection: List[Tuple[ASTNode, ASTNode]] = field(
-        default_factory=list
+        default_factory=list,
     )  # selected nodes
     group_by: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(default_factory=list)
     filters: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(
-        default_factory=list
+        default_factory=list,
     )  # where/having
     ons: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(
-        default_factory=list
+        default_factory=list,
     )  # join ons
 
     @property
@@ -317,8 +268,10 @@ class QueryDependencies:
             ret |= cte_deps.all_node_dependencies
         return ret
 
+
 def extract_dependencies_from_select(
-    session: Session, select: Select
+    session: Session,
+    select: Select,
 ) -> SelectDependencies:
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
@@ -353,15 +306,17 @@ def extract_dependencies_from_select(
         if (namespace and "" in namespaces) or (namespace == "" and namespaces):
             with CompoundBuildException().catch:
                 raise InvalidSQLException(
-                    f"You may only use an unnamed subquery alone.", table
+                    f"You may only use an unnamed subquery alone.",
+                    table,
                 )
-
 
         # you cannot have multiple references with the same name
         if namespace in namespaces:
             with CompoundBuildException().catch:
-                raise InvalidSQLException(f"Duplicate name `{namespace}` for table.", table)
-            
+                raise InvalidSQLException(
+                    f"Duplicate name `{namespace}` for table.",
+                    table,
+                )
 
         namespaces[namespace] = []
 
@@ -375,7 +330,6 @@ def extract_dependencies_from_select(
             if table.ctes:
                 with CompoundBuildException().catch:
                     raise InvalidSQLException("ctes are not allowed here", table)
-                
 
             subqueries.append(table.select)
 
@@ -387,7 +341,7 @@ def extract_dependencies_from_select(
                             col,
                             table.select,
                         )
-                    
+
                 namespaces[namespace].append(col.name.name)
         # tables are sought as nodes and nothing else
         # can be source, transform, dimension
@@ -428,7 +382,7 @@ def extract_dependencies_from_select(
                     col,
                     col.parent,
                 )
-            
+
             return
         elif col.name.name not in cols:
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
@@ -440,7 +394,7 @@ def extract_dependencies_from_select(
                     exc_msg = f"`{col.name.name}` has multiple references and so must be namespaced."
             with CompoundBuildException().catch:
                 MissingColumnException(exc_msg, col, col.parent)
-            
+
             return
         elif namespace:
             add.append((col, table_nodes[namespace]))
@@ -485,7 +439,6 @@ def extract_dependencies_from_select(
                 select.having,
                 select,
             )
-        
 
     if select.where:
         gbfo += [
@@ -511,9 +464,11 @@ def extract_dependencies_from_select(
             if not dim_allowed:
                 with CompoundBuildException().catch:
                     raise InvalidSQLException(
-                        f"Cannot reference a dimension here.", col, col.parent
+                        f"Cannot reference a dimension here.",
+                        col,
+                        col.parent,
                     )
-                
+
             else:
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if (dim is not None) and (
@@ -525,7 +480,7 @@ def extract_dependencies_from_select(
                             col,
                             col.parent,
                         )
-                    
+
                     add.append((col, dim))
                     dimension_columns.add(dim)
 
@@ -548,24 +503,26 @@ def extract_dependencies_from_select(
                     dim,
                     select.from_,
                 )
-            
 
     for subquery in subqueries:
         table_deps.subqueries.append(
             (
                 subquery,
                 extract_dependencies_from_select(session, subquery),
-            )
+            ),
         )
 
     return table_deps
 
+
 def extract_dependencies_from_query(
-    session: Session, query: Query
+    session: Session,
+    query: Query,
 ) -> QueryDependencies:
     return QueryDependencies(
-        select=extract_dependencies_from_select(session, query.select)
+        select=extract_dependencies_from_select(session, query.select),
     )
+
 
 def extract_dependencies(
     session: Session,
@@ -608,6 +565,7 @@ def extract_dependencies(
             invalid.add(exc.node)
 
     return dep_nodes, invalid
+
 
 def build_select(
     session: Session,
@@ -659,7 +617,9 @@ def build_select(
             join_info = dict()
             # str, (DJ Node, [AST Table Node])
             for table_name, (table_node, tables) in chain(
-                transforms.items(), sources.items(), dimensions_tables.items()
+                transforms.items(),
+                sources.items(),
+                dimensions_tables.items(),
             ):
                 dim_cols = [col for col in table_node.columns if col.dimension == dim]
                 join_info[table_name] = (
@@ -670,7 +630,7 @@ def build_select(
                     joinable = True
             if not joinable:
                 raise Exception(
-                    f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`."""
+                    f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`.""",
                 )
 
             dim_ast = Alias(Name(alias), child=parse(dim.query, dialect))
@@ -689,9 +649,10 @@ def build_select(
                             BinaryOp.Eq(
                                 Column(Name(col.name), _table=table),
                                 Column(
-                                    Name(col.dimension_column), Namespace([Name(alias)])
+                                    Name(col.dimension_column),
+                                    Namespace([Name(alias)]),
                                 ),
-                            )
+                            ),
                         )
                 joins.append(Join.LeftOuter(dim_ast, reduce(BinaryOp.And, on)))
 
@@ -699,7 +660,8 @@ def build_select(
 
     # handle all nodes referenced as tables
     for node_name, (node, tables) in chain(
-        transforms.items(), dimensions_tables.items()
+        transforms.items(),
+        dimensions_tables.items(),
     ):
         alias = amenable_name(node.name)
         table_ast = Alias(Name(alias), child=parse(node.query, dialect))
@@ -708,7 +670,8 @@ def build_select(
             parent = table.parent
             parent.replace(table, table_ast)
             if not isinstance(
-                parent, Alias
+                parent,
+                Alias,
             ):  # if the table is not already aliased we will need to alias it and replace column refs
                 for (
                     col,
@@ -724,6 +687,7 @@ def build_select(
 
     for subquery, subquery_deps in deps.subqueries:
         build_select(session, subquery, subquery_deps, dialect)
+
 
 def build_query(
     session: Session,

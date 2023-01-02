@@ -12,11 +12,11 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Protocol,
     Tuple,
     Type,
     TypeVar,
     Union,
-    Protocol,
 )
 
 from dj.sql.parsing.backends.exceptions import DJParseException
@@ -174,13 +174,21 @@ class Node(ABC):
     def children(self) -> Iterator["Node"]:
         """returns an iterator of all nodes that are one step from the current node down including through iterables"""  # pylint: disable=C0301
         return self.fields(
-            flat=True, nodes_only=True, obfuscated=False, nones=False, named=False
+            flat=True,
+            nodes_only=True,
+            obfuscated=False,
+            nones=False,
+            named=False,
         )
 
     def replace(self: TNode, from_: "Node", to: "Node") -> TNode:
         """Replace a node `from_` with a node `to` in the subtree"""
         for name, child in self.fields(
-            flat=False, nodes_only=False, obfuscated=True, nones=False, named=True
+            flat=False,
+            nodes_only=False,
+            obfuscated=True,
+            nones=False,
+            named=True,
         ):
             if isinstance(child, (list, tuple)):
                 new = []

@@ -1,7 +1,7 @@
 """
 parsing backend turning sqloxide output into DJ AST
 """
-from typing import List, Set, Union, Optional
+from typing import List, Optional, Set, Union
 
 from sqloxide import parse_sql
 
