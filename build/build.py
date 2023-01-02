@@ -188,7 +188,7 @@ class NodeTypeException(BuildException):
             ret += f" from:\n\n `{self.context}`"
         return ret
 
-class CompoundBuildException(Exception):
+class CompoundBuildException(BuildException):
     _instance: Optional["CompoundBuildException"] = None
     _raise: bool = True
     errors: List[BuildException]
@@ -198,6 +198,7 @@ class CompoundBuildException(Exception):
             cls._instance = super(CompoundBuildException, cls).__new__(
                 cls, *args, **kwargs
             )
+            cls.errors = []
         return cls._instance
 
     def reset(self):
@@ -209,24 +210,17 @@ class CompoundBuildException(Exception):
 
     def set_raise(self, raise_: bool):
         self._raise = raise_
-
+    
+    @property
     @contextmanager
-    def ignore(self):
-        memory = self._raise
-        self.set_raise(True)
+    def catch(self):
         try:
             yield
-        except Exception as exc:
-            self.set_raise(memory)
-            raise exc
-
-    def raise_(self, exception: Exception, from_: Optional[BuildException] = None):
-        if not self._raise:
-            self.errors.append(exception)
-        else:
-            if from_ is not None:
-                raise exception from from_
-            raise exception
+        except BuildException as exc:
+            if not self._raise:
+                self.errors.append(exc)
+            else:
+                raise exc
 
     def __str__(self) -> str:
         plural = "s" if len(self.errors) > 1 else ""
@@ -245,20 +239,19 @@ def get_dj_node(
     try:
         match = session.exec(query).one()
     except NoResultFound as exc:
-        CompoundBuildException().raise_(
-            UnknownNodeException(
+        with CompoundBuildException().catch:
+            raise UnknownNodeException(
                 f"No {' or '.join(str(k) for k in kinds)} node `{node_name}` exists.",
                 node_name,
-            ),
-            exc,
-        )
+            ) from exc
+
     if match and (kinds is not None) and (match.type not in kinds):
-        CompoundBuildException().raise_(
-            NodeTypeException(
+        with CompoundBuildException().catch:
+            raise NodeTypeException(
                 f"Node `{match.name}` is of type `{str(match.type).upper()}`. Expected kind to be of {' or '.join(str(k) for k in kinds)}.",
                 node_name,
             )
-        )
+        
     return match
 
 from dataclasses import dataclass, field
@@ -358,17 +351,17 @@ def extract_dependencies_from_select(
 
         # you cannot combine an unnamed subquery with anything else
         if (namespace and "" in namespaces) or (namespace == "" and namespaces):
-            CompoundBuildException().raise_(
-                InvalidSQLException(
+            with CompoundBuildException().catch:
+                raise InvalidSQLException(
                     f"You may only use an unnamed subquery alone.", table
                 )
-            )
+
 
         # you cannot have multiple references with the same name
         if namespace in namespaces:
-            CompoundBuildException().raise_(
-                InvalidSQLException(f"Duplicate name `{namespace}` for table.", table)
-            )
+            with CompoundBuildException().catch:
+                raise InvalidSQLException(f"Duplicate name `{namespace}` for table.", table)
+            
 
         namespaces[namespace] = []
 
@@ -380,21 +373,21 @@ def extract_dependencies_from_select(
         # but introspect the columns to make sure the parent query selection is valid
         if isinstance(table, Query):
             if table.ctes:
-                CompoundBuildException().raise_(
-                    InvalidSQLException("ctes are not allowed here", table)
-                )
+                with CompoundBuildException().catch:
+                    raise InvalidSQLException("ctes are not allowed here", table)
+                
 
             subqueries.append(table.select)
 
             for col in table.select.projection:
                 if not isinstance(col, Named):
-                    CompoundBuildException().raise_(
-                        InvalidSQLException(
+                    with CompoundBuildException().catch:
+                        raise InvalidSQLException(
                             f"{col} is an unnamed expression. Try adding an alias.",
                             col,
                             table.select,
                         )
-                    )
+                    
                 namespaces[namespace].append(col.name.name)
         # tables are sought as nodes and nothing else
         # can be source, transform, dimension
@@ -429,13 +422,13 @@ def extract_dependencies_from_select(
         namespace = make_name(col.namespace)  # str preceding the column name
         cols = namespaces.get(namespace)
         if cols is None:
-            CompoundBuildException().raise_(
-                MissingColumnException(
+            with CompoundBuildException().catch:
+                raise MissingColumnException(
                     f"No namespace `{namespace}` from which to reference column `{col.name.name}`.",
                     col,
                     col.parent,
                 )
-            )
+            
             return
         elif col.name.name not in cols:
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
@@ -445,9 +438,9 @@ def extract_dependencies_from_select(
                 )
                 if col.name.name in multiple_refs:
                     exc_msg = f"`{col.name.name}` has multiple references and so must be namespaced."
-            CompoundBuildException().raise_(
+            with CompoundBuildException().catch:
                 MissingColumnException(exc_msg, col, col.parent)
-            )
+            
             return
         elif namespace:
             add.append((col, table_nodes[namespace]))
@@ -486,13 +479,13 @@ def extract_dependencies_from_select(
                 for col in select.having.find_all(Column)
             ]
     elif select.having:
-        CompoundBuildException().raise_(
-            InvalidSQLException(
+        with CompoundBuildException().catch:
+            raise InvalidSQLException(
                 "HAVING without a GROUP BY is not allowed. Use WHERE instead.",
                 select.having,
                 select,
             )
-        )
+        
 
     if select.where:
         gbfo += [
@@ -516,23 +509,23 @@ def extract_dependencies_from_select(
         if bad_namespace:
             namespace = make_name(col.namespace)
             if not dim_allowed:
-                CompoundBuildException().raise_(
-                    InvalidSQLException(
+                with CompoundBuildException().catch:
+                    raise InvalidSQLException(
                         f"Cannot reference a dimension here.", col, col.parent
                     )
-                )
+                
             else:
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if (dim is not None) and (
                     not col.name.name in {c.name for c in dim.columns}
                 ):
-                    CompoundBuildException().raise_(
-                        MissingColumnException(
+                    with CompoundBuildException().catch:
+                        raise MissingColumnException(
                             f"Dimension `{dim.name}` has no column `{col.name.name}`.",
                             col,
                             col.parent,
                         )
-                    )
+                    
                     add.append((col, dim))
                     dimension_columns.add(dim)
 
@@ -549,13 +542,13 @@ def extract_dependencies_from_select(
             if joinable:
                 break
         if not joinable:
-            CompoundBuildException().raise_(
+            with CompoundBuildException().catch:
                 NodeTypeException(
                     f"Dimension `{dim.name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause.",
                     dim,
                     select.from_,
                 )
-            )
+            
 
     for subquery in subqueries:
         table_deps.subqueries.append(
