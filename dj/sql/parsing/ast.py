@@ -12,14 +12,16 @@ from typing import (
     Iterator,
     List,
     Optional,
-    Set,
     Tuple,
     Type,
     TypeVar,
     Union,
+    Protocol,
 )
 
 from dj.sql.parsing.backends.exceptions import DJParseException
+
+PRIMITIVES = {int, float, str, bool, type(None)}
 
 
 def flatten(maybe_iterables: Any) -> Iterator:
@@ -53,7 +55,7 @@ class Node(ABC):
 
     DJ nodes are python dataclasses with the following patterns:
         - Attributes are either
-            - primitives (int, float, str, bool, None)
+            - PRIMITIVES (int, float, str, bool, None)
             - iterable from (list, tuple, set)
             - Enum
             - descendant of `Node`
@@ -61,37 +63,45 @@ class Node(ABC):
 
     """
 
-    _parents: Set["Node"]
+    parent: Optional["Node"] = None
 
     def __post_init__(self):
-        self._parents = set()
         self.add_self_as_parent()
 
-    @property
-    def parents(self) -> Set["Node"]:
-        """get the parents of the node"""
-        return self._parents
-
-    def clear_parents(self: TNode) -> TNode:
-        """remove all parents from the node"""
-        self._parents = set()
+    def clear_parent(self: TNode) -> TNode:
+        """remove parent from the node"""
+        self.parent = None
         return self
 
-    def add_parents(self: TNode, *parents: "Node") -> TNode:
-        """add parents to the node"""
-        self.parents.update(parents)
-        return self
-
-    def remove_parents(self: TNode, *parents: "Node") -> TNode:
-        """remove potential parents if they belong to the node"""
-        self._parents -= set(parents)
+    def set_parent(self: TNode, parent: "Node") -> TNode:
+        """add parent to the node"""
+        self.parent = parent
         return self
 
     def add_self_as_parent(self: TNode) -> TNode:
         """adds self as a parent to all children"""
         for child in self.children:
-            child.add_parents(self)
+            child.set_parent(self)
         return self
+
+    def __setattr__(self, key: str, value: Any):
+        """Facilitates setting children using `.` syntax ensuring parent is attributed"""
+        if key == "parent":
+            object.__setattr__(self, key, value)
+            return
+
+        object.__setattr__(self, key, value)
+        for child in flatten(value):
+            if isinstance(child, Node) and not key.startswith("_"):
+                child.set_parent(self)
+
+    def get_nearest_parent_of_type(self: "Node", node_type: TNode) -> Optional[TNode]:
+        """traverse up the tree until you find a node of `node_type` or hit the root"""
+        if isinstance(self.parent, node_type):
+            return self.parent
+        if self.parent is None:
+            return None
+        return self.parent.get_nearest_parent_of_type(node_type)
 
     def flatten(self) -> Iterator["Node"]:
         """flatten the sub-ast of the node as an iterator"""
@@ -103,6 +113,7 @@ class Node(ABC):
         nodes_only: bool = True,
         obfuscated: bool = False,
         nones: bool = False,
+        named: bool = False,
     ) -> Iterator:
         """Returns an iterator over fields of a node with particular filters
 
@@ -113,16 +124,24 @@ class Node(ABC):
                 (typically accessed via a property)
             nones: yield values that are None
                 (optional fields without a value); trumped by `nodes_only`
+            named: yield pairs `(field name: str, field value)`; conflicts with flat
         Returns:
             Iterator: returns all children of a node given filters
                 and optional flattening (by default Iterator[Node])
         """
+        if flat and named:
+            raise Exception("Cannot get fields `flat` and `named`.")
 
         def make_child_generator():
             """makes a generator enclosing self to return not obfuscated fields (fields without starting `_`)"""  # pylint: disable=C0301
             for self_field in fields(self):
                 if not self_field.name.startswith("_") if not obfuscated else True:
-                    yield self.__dict__[self_field.name]
+                    if self_field.name in self.__dict__:
+                        value = self.__dict__[self_field.name]
+                        if named:
+                            yield self_field.name, value
+                        else:
+                            yield value
 
         # `iter`s used to satisfy mypy (`child_generator` type changes between generator, filter)
         child_generator = iter(make_child_generator())
@@ -132,14 +151,21 @@ class Node(ABC):
         if nodes_only:
             child_generator = iter(
                 filter(
-                    lambda child: isinstance(child, Node),
+                    lambda child: isinstance(child, Node)
+                    if not named
+                    else isinstance(child[1], Node),
                     child_generator,
                 ),
             )
 
         if not nones:
             child_generator = iter(
-                filter(lambda child: child is not None, child_generator),
+                filter(
+                    lambda child: (child is not None)
+                    if not named
+                    else (child[1] is not None),
+                    child_generator,
+                ),
             )  # pylint: disable=C0301
 
         return child_generator
@@ -147,7 +173,35 @@ class Node(ABC):
     @property
     def children(self) -> Iterator["Node"]:
         """returns an iterator of all nodes that are one step from the current node down including through iterables"""  # pylint: disable=C0301
-        return self.fields(flat=True, nodes_only=True, obfuscated=False, nones=False)
+        return self.fields(
+            flat=True, nodes_only=True, obfuscated=False, nones=False, named=False
+        )
+
+    def replace(self: TNode, from_: "Node", to: "Node") -> TNode:
+        """Replace a node `from_` with a node `to` in the subtree"""
+        for name, child in self.fields(
+            flat=False, nodes_only=False, obfuscated=True, nones=False, named=True
+        ):
+            if isinstance(child, (list, tuple)):
+                new = []
+                for c in child:
+                    if id(c) != id(from_):
+                        new.append(c)
+                    else:
+                        new.append(to)
+                    if isinstance(c, Node):
+                        c.replace(from_, to)
+                if isinstance(child, tuple):
+                    new = tuple(new)
+
+                self.__setattr__(name, new)
+            else:
+                if id(child) == id(from_):
+                    self.__setattr__(name, to)
+            if isinstance(child, Node):
+                child.replace(from_, to)
+
+        return self
 
     def filter(self, func: Callable[["Node"], bool]) -> Iterator["Node"]:
         """find all nodes that `func` returns `True` for"""
@@ -194,10 +248,9 @@ class Node(ABC):
         Compares all others for type equality only. No recursing.
         Note: Does not check (sub)AST. See `Node.compare` for comparing (sub)ASTs.
         """
-        primitives = {int, float, str, bool, type(None)}
         return type(self) == type(other) and all(  # pylint: disable=C0123
             s == o
-            if type(s) in primitives  # pylint: disable=C0123
+            if type(s) in PRIMITIVES  # pylint: disable=C0123
             else type(s) == type(o)  # pylint: disable=C0123
             for s, o in zip(
                 (self.fields(False, False, False, True)),
@@ -214,8 +267,17 @@ class Node(ABC):
         """get the string of a node"""
 
 
+TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C0103
+
+
 class Expression(Node):
     """an expression type simply for type checking"""
+
+    def alias_or_self(self: TExpression) -> TExpression:
+        """get the alias name of an expression if it is the descendant of an alias otherwise get its own name"""  # pylint: disable=C0301
+        if isinstance(self.parent, Alias):
+            return self.parent
+        return self
 
 
 @dataclass(eq=False)
@@ -256,7 +318,7 @@ class Namespace(Node):
         """
         if not self.names:
             raise DJParseException("Namespace is empty")
-        converted = named_type(self.names.pop().clear_parents())
+        converted = named_type(self.names.pop().clear_parent())
         if self.names:
             converted.add_namespace(self)
         return converted
@@ -267,7 +329,7 @@ class Namespace(Node):
         useful for parsing compound identifiers and revealing
         the last name for another attribute
         """
-        last = self.names.pop().clear_parents()
+        last = self.names.pop().clear_parent()
         return self, last
 
     def __str__(self) -> str:
@@ -293,15 +355,35 @@ class Named(Expression):
 
     def alias_or_name(self) -> Name:
         """get the alias name of a node if it is the descendant of an alias otherwise get its own name"""  # pylint: disable=C0301
-        if len(self.parents) == 1:
-            parent = tuple(self.parents)[0]
-            if isinstance(parent, Alias):
-                return parent.name
-        return self.name
+        return self.alias_or_self().name
 
 
 class Operation(Expression):
     """a type to overarch types that operate on other expressions"""
+
+
+class EnumBasedNode(Protocol):
+    def __init__(self, kind: DJEnum, *args, **kwargs) -> None:
+        ...
+
+
+def constructors_from_enum(EnumType: Type[DJEnum]) -> Callable[[EnumBasedNode], None]:
+    class EnumBasedNode(Protocol):
+        def __init__(self, kind: EnumType, *args, **kwargs) -> None:
+            ...
+
+    def wrapper(cls: Type[EnumBasedNode]) -> Type[EnumBasedNode]:
+        for level in EnumType:
+            func = f"""
+def {level.name}(*args, **kwargs)-> EnumBasedNode:
+    "Constructor method to make a {cls.__name__} of kind {level.name}"
+    return {cls.__name__}({level}, *args, *kwargs)
+            """.strip()
+            exec(func)
+            type.__setattr__(cls, level.name, locals()[level.name])
+        return cls
+
+    return wrapper
 
 
 # pylint: disable=C0103
@@ -316,6 +398,7 @@ class UnaryOpKind(DJEnum):
 # pylint: enable=C0103
 
 
+@constructors_from_enum(UnaryOpKind)
 @dataclass(eq=False)
 class UnaryOp(Operation):
     """an operation that operates on a single expression"""
@@ -356,12 +439,13 @@ class BinaryOpKind(DJEnum):
 # pylint: enable=C0103
 
 
+@constructors_from_enum(BinaryOpKind)
 @dataclass(eq=False)
 class BinaryOp(Operation):
     """represents an operation that operates on two expressions"""
 
-    left: Expression
     op: BinaryOpKind  # pylint: disable=C0103
+    left: Expression
     right: Expression
 
     def __hash__(self) -> int:
@@ -520,8 +604,14 @@ class Column(Named):
         return hash((Column, self.name))
 
     def __str__(self) -> str:
-        prefix = "" if self.namespace is None else str(self.namespace) + "."
-        prefix += "" if self.table is None else str(self.table.alias_or_name()) + "."
+        prefix = "" if self.namespace is None else str(self.namespace)
+        if self.table is not None:
+            prefix += "" if not prefix else "."
+            if isinstance(self.table.parent, Alias):
+                prefix += str(self.table.parent.name)
+            else:
+                prefix += str(self.table)
+        prefix += "." if prefix else ""
         return prefix + str(self.name)
 
 
@@ -589,14 +679,16 @@ class JoinKind(DJEnum):
 
 
 # pylint: enable=C0103
+TableExpression = Union[Table, Alias[Table], "Select", Alias["Select"]]
 
 
+@constructors_from_enum(JoinKind)
 @dataclass(eq=False)
 class Join(Node):
     """a join between tables"""
 
     kind: JoinKind
-    table: Union[Table, Alias]
+    table: TableExpression
     on: Expression  # pylint: disable=C0103
 
     def __hash__(self) -> int:
@@ -611,7 +703,7 @@ class Join(Node):
 class From(Node):
     """a from that belongs to a select"""
 
-    tables: List[Union[Table, Alias[Table], Alias["Select"]]]
+    tables: List[TableExpression]
     joins: List[Join] = field(default_factory=list)
 
     def __hash__(self) -> int:
@@ -626,7 +718,7 @@ class From(Node):
 
 
 @dataclass(eq=False)
-class Select(Node):
+class Select(Expression):
     """a single select statement type"""
 
     from_: From
@@ -668,7 +760,7 @@ class Query(Expression):
         return id(self)
 
     def __str__(self) -> str:
-        subquery = bool(self.parents)
+        subquery = bool(self.parent)
         ctes = ",\n".join(f"{cte.name} AS ({(cte.child)})" for cte in self.ctes)
         with_ = "WITH" if ctes else ""
         select = f"({(self.select)})" if subquery else (self.select)
