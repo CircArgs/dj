@@ -27,6 +27,7 @@ from dj.sql.parsing.ast import (
     Select,
     String,
     Table,
+    TableExpression,
     UnaryOp,
     UnaryOpKind,
     Value,
@@ -185,7 +186,7 @@ def parse_column(parse_tree: dict):
     return parse_expression(parse_tree)
 
 
-def parse_table(parse_tree: dict) -> Union[Alias, Table]:
+def parse_table(parse_tree: dict) -> TableExpression:
     """parse a table"""
     if match_keys(parse_tree, {"Derived"}):
         subtree = parse_tree["Derived"]
@@ -194,25 +195,30 @@ def parse_table(parse_tree: dict) -> Union[Alias, Table]:
 
         alias = subtree["alias"]
         subquery = parse_query(subtree["subquery"])
+        if subquery.ctes:
+            raise DJParseException("CTEs are not allowed in a subquery")
+        subselect = subquery.select
         if alias:
             if alias["columns"]:
                 raise DJParseException(  # pragma: no cover
                     "Parsing does not support columns in derived from.",
                 )
-            return Alias(
+            aliased: Alias[Select] = Alias(
                 parse_name(alias["name"]),
-                child=subquery,
+                child=subselect,
             )
-        return subquery
+            return aliased
+        return subselect
     if match_keys(parse_tree, {"Table"}):
         subtree = parse_tree["Table"]
 
         table = parse_namespace(subtree["name"]).to_named_type(Table)
         if subtree["alias"]:
-            return Alias(
+            aliased: Alias[Table] = Alias(  # type: ignore
                 parse_name(subtree["alias"]["name"]),
                 child=table,
             )
+            return aliased
         return table
 
     raise DJParseException("Failed to parse Table")  # pragma: no cover

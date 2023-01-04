@@ -12,11 +12,11 @@ from typing import (
     Iterator,
     List,
     Optional,
-    Protocol,
     Tuple,
     Type,
     TypeVar,
     Union,
+    cast,
 )
 
 from dj.sql.parsing.backends.exceptions import DJParseException
@@ -95,7 +95,10 @@ class Node(ABC):
             if isinstance(child, Node) and not key.startswith("_"):
                 child.set_parent(self)
 
-    def get_nearest_parent_of_type(self: "Node", node_type: TNode) -> Optional[TNode]:
+    def get_nearest_parent_of_type(
+        self: "Node",
+        node_type: Type[TNode],
+    ) -> Optional[TNode]:
         """traverse up the tree until you find a node of `node_type` or hit the root"""
         if isinstance(self.parent, node_type):
             return self.parent
@@ -200,7 +203,7 @@ class Node(ABC):
                     if isinstance(c, Node):
                         c.replace(from_, to)
                 if isinstance(child, tuple):
-                    new = tuple(new)
+                    new = tuple(new)  # type: ignore
 
                 self.__setattr__(name, new)
             else:
@@ -218,9 +221,9 @@ class Node(ABC):
         for node in chain(*[child.filter(func) for child in self.children]):
             yield node
 
-    def find_all(self, node_type: Type["Node"]) -> Iterator["Node"]:
+    def find_all(self, node_type: TNode) -> Iterator[TNode]:
         """find all nodes of a particular type in the node's sub-ast"""
-        return self.filter(lambda n: isinstance(n, node_type))
+        return cast(self.filter(lambda n: isinstance(n, node_type)), Iterator[TNode])
 
     def apply(self, func: Callable[["Node"], None]):
         """
@@ -275,7 +278,10 @@ class Node(ABC):
         """get the string of a node"""
 
 
-TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C0103
+TExpression = TypeVar(
+    "TExpression",
+    bound="Expression",
+)  # pylint: disable=C0103
 
 
 class Expression(Node):
@@ -284,7 +290,7 @@ class Expression(Node):
     def alias_or_self(self: TExpression) -> TExpression:
         """get the alias name of an expression if it is the descendant of an alias otherwise get its own name"""  # pylint: disable=C0301
         if isinstance(self.parent, Alias):
-            return self.parent
+            return self.parent  # type: ignore
         return self
 
 
@@ -370,30 +376,6 @@ class Operation(Expression):
     """a type to overarch types that operate on other expressions"""
 
 
-class EnumBasedNode(Protocol):
-    def __init__(self, kind: DJEnum, *args, **kwargs) -> None:
-        ...
-
-
-def constructors_from_enum(EnumType: Type[DJEnum]) -> Callable[[EnumBasedNode], None]:
-    class EnumBasedNode(Protocol):
-        def __init__(self, kind: EnumType, *args, **kwargs) -> None:
-            ...
-
-    def wrapper(cls: Type[EnumBasedNode]) -> Type[EnumBasedNode]:
-        for level in EnumType:
-            func = f"""
-def {level.name}(*args, **kwargs)-> EnumBasedNode:
-    "Constructor method to make a {cls.__name__} of kind {level.name}"
-    return {cls.__name__}({level}, *args, *kwargs)
-            """.strip()
-            exec(func)
-            type.__setattr__(cls, level.name, locals()[level.name])
-        return cls
-
-    return wrapper
-
-
 # pylint: disable=C0103
 class UnaryOpKind(DJEnum):
     """the accepted unary operations"""
@@ -406,7 +388,6 @@ class UnaryOpKind(DJEnum):
 # pylint: enable=C0103
 
 
-@constructors_from_enum(UnaryOpKind)
 @dataclass(eq=False)
 class UnaryOp(Operation):
     """an operation that operates on a single expression"""
@@ -447,7 +428,6 @@ class BinaryOpKind(DJEnum):
 # pylint: enable=C0103
 
 
-@constructors_from_enum(BinaryOpKind)
 @dataclass(eq=False)
 class BinaryOp(Operation):
     """represents an operation that operates on two expressions"""
@@ -690,7 +670,6 @@ class JoinKind(DJEnum):
 TableExpression = Union[Table, Alias[Table], "Select", Alias["Select"]]
 
 
-@constructors_from_enum(JoinKind)
 @dataclass(eq=False)
 class Join(Node):
     """a join between tables"""

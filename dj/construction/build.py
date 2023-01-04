@@ -3,18 +3,29 @@ Functions for building queries, from nodes or SQL.
 """
 
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from functools import reduce
 from itertools import chain
 from string import ascii_letters, digits
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, Generator, List, Optional, Set, Tuple, Union
 
 from sqlalchemy.orm.exc import NoResultFound
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from dj.models.node import Node, NodeType
-from dj.sql.parsing.ast import Alias, BinaryOp, Column, Join, Name, Named, Namespace
+from dj.sql.parsing.ast import (
+    Alias,
+    BinaryOp,
+    BinaryOpKind,
+    Column,
+    Join,
+    JoinKind,
+    Name,
+    Named,
+    Namespace,
+)
 from dj.sql.parsing.ast import Node as ASTNode
-from dj.sql.parsing.ast import Query, Select, Table, flatten
+from dj.sql.parsing.ast import Query, Select, Table, TableExpression, flatten
 from dj.sql.parsing.backends.sqloxide import parse
 
 ACCEPTABLE_CHARS = set(ascii_letters + digits + "_")
@@ -45,7 +56,6 @@ def amenable_name(name: str) -> str:
     """Takes a string and makes it have only alphanumerics/_"""
     ret = []
     cont = []
-    join_cont = False
     for c in name:
         if c in ACCEPTABLE_CHARS:
             cont.append(c)
@@ -158,7 +168,7 @@ class CompoundBuildException(BuildException):
     def set_raise(self, raise_: bool):
         self._raise = raise_
 
-    @property
+    @property  # type: ignore
     @contextmanager
     def catch(self):
         try:
@@ -190,12 +200,13 @@ def get_dj_node(
         match = session.exec(query).one()
     except NoResultFound as exc:
         with CompoundBuildException().catch:
+            kind_msg = " or ".join(str(k) for k in kinds) if kinds else ""
             raise UnknownNodeException(
-                f"No {' or '.join(str(k) for k in kinds)} node `{node_name}` exists.",
+                f"No {kind_msg} node `{node_name}` exists.",
                 node_name,
             ) from exc
 
-    if match and (kinds is not None) and (match.type not in kinds):
+    if match and kinds and (match.type not in kinds):
         with CompoundBuildException().catch:
             raise NodeTypeException(
                 f"Node `{match.name}` is of type `{str(match.type).upper()}`. Expected kind to be of {' or '.join(str(k) for k in kinds)}.",
@@ -203,10 +214,6 @@ def get_dj_node(
             )
 
     return match
-
-
-from dataclasses import dataclass, field
-from itertools import chain
 
 
 @dataclass
@@ -225,7 +232,9 @@ class ColumnDependencies:
     )  # join ons
 
     @property
-    def all_columns(self) -> Tuple[ASTNode, Union[ASTNode, Node]]:
+    def all_columns(
+        self,
+    ) -> Generator[Tuple[ASTNode, Union[ASTNode, Node]], None, None]:
         for pair in chain(
             iter(self.projection),
             iter(self.group_by),
@@ -242,7 +251,7 @@ class SelectDependencies:
     subqueries: List[Tuple[Select, "SelectDependencies"]] = field(default_factory=list)
 
     @property
-    def all_tables(self) -> Tuple[ASTNode, Node]:
+    def all_tables(self) -> Generator[Tuple[ASTNode, Node], None, None]:
         for t in self.tables:
             yield t
         for _, s in self.subqueries:
@@ -269,6 +278,7 @@ class QueryDependencies:
         return ret
 
 
+# flake8: noqa: C901
 def extract_dependencies_from_select(
     session: Session,
     select: Select,
@@ -283,13 +293,13 @@ def extract_dependencies_from_select(
     tables = select.from_.tables + [join.table for join in select.from_.joins]
 
     # namespaces track the namespace: list of columns that can be had from it
-    namespaces = dict()
+    namespaces: Dict[str, Set[str]] = dict()
 
     # namespace: ast node defining namespace
-    table_nodes = dict()
+    table_nodes: Dict[str, TableExpression] = dict()
 
     # track subqueries encountered to extract from them after
-    subqueries = []
+    subqueries: List[Select] = []
 
     # used to check need and capacity for merging in dimensions
     dimension_columns: Set[Node] = set()
@@ -306,7 +316,7 @@ def extract_dependencies_from_select(
         if (namespace and "" in namespaces) or (namespace == "" and namespaces):
             with CompoundBuildException().catch:
                 raise InvalidSQLException(
-                    f"You may only use an unnamed subquery alone.",
+                    "You may only use an unnamed subquery alone.",
                     table,
                 )
 
@@ -318,10 +328,10 @@ def extract_dependencies_from_select(
                     table,
                 )
 
-        namespaces[namespace] = []
+        namespaces[namespace] = set()
 
         if isinstance(table, Alias):
-            table = table.child
+            table = table.child  # type: ignore
 
         # subquery handling
         # we track subqueries separately and extract at the end
@@ -342,7 +352,7 @@ def extract_dependencies_from_select(
                             table.select,
                         )
 
-                namespaces[namespace].append(col.name.name)
+                namespaces[namespace].add(col.name.name)
         # tables are sought as nodes and nothing else
         # can be source, transform, dimension
         elif isinstance(table, Table):
@@ -353,7 +363,7 @@ def extract_dependencies_from_select(
                 {NodeType.SOURCE, NodeType.TRANSFORM, NodeType.DIMENSION},
             )
             if table_node is not None:
-                namespaces[namespace] += [c.name for c in table_node.columns]
+                namespaces[namespace] |= {c.name for c in table_node.columns}
                 table_deps.tables.append((table, table_node))
                 if table_node.type in {NodeType.SOURCE, NodeType.TRANSFORM}:
                     sources_transforms.add(table_node)
@@ -364,12 +374,12 @@ def extract_dependencies_from_select(
     no_namespace_safe_cols = set()
     multiple_refs = set()
     for namespaces_cols in namespaces.values():
-        for col in namespaces_cols:
+        for col in namespaces_cols:  # type: ignore
             if col in no_namespace_safe_cols:
                 multiple_refs.add(col)
             no_namespace_safe_cols.add(col)
 
-    namespaces[""] = no_namespace_safe_cols - multiple_refs
+    namespaces[""] = no_namespace_safe_cols - multiple_refs  # type: ignore
 
     def check_col(col: Column, add: list) -> Optional[str]:
         """Check if a column can be had in a query"""
@@ -383,7 +393,7 @@ def extract_dependencies_from_select(
                     col.parent,
                 )
 
-            return
+            return None
         elif col.name.name not in cols:
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
             if not namespace:
@@ -395,7 +405,7 @@ def extract_dependencies_from_select(
             with CompoundBuildException().catch:
                 MissingColumnException(exc_msg, col, col.parent)
 
-            return
+            return None
         elif namespace:
             add.append((col, table_nodes[namespace]))
             if (
@@ -464,7 +474,7 @@ def extract_dependencies_from_select(
             if not dim_allowed:
                 with CompoundBuildException().catch:
                     raise InvalidSQLException(
-                        f"Cannot reference a dimension here.",
+                        "Cannot reference a dimension here.",
                         col,
                         col.parent,
                     )
@@ -472,7 +482,7 @@ def extract_dependencies_from_select(
             else:
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if (dim is not None) and (
-                    not col.name.name in {c.name for c in dim.columns}
+                    col.name.name not in {c.name for c in dim.columns}
                 ):
                     with CompoundBuildException().catch:
                         raise MissingColumnException(
@@ -567,6 +577,7 @@ def extract_dependencies(
     return dep_nodes, invalid
 
 
+# flake8: noqa: C901
 def build_select(
     session: Session,
     select: Select,
@@ -646,7 +657,8 @@ def build_select(
                     on = []
                     for col in cols:
                         on.append(
-                            BinaryOp.Eq(
+                            BinaryOp(
+                                BinaryOpKind.Eq,
                                 Column(Name(col.name), _table=table),
                                 Column(
                                     Name(col.dimension_column),
@@ -654,7 +666,12 @@ def build_select(
                                 ),
                             ),
                         )
-                joins.append(Join.LeftOuter(dim_ast, reduce(BinaryOp.And, on)))
+                joins.append(
+                    Join(
+                        JoinKind.LeftOuterdim_ast,
+                        reduce(lambda l, r: BinaryOp(BinaryOpKind.And, l, r), on),
+                    ),
+                )
 
             select.from_.joins += joins
 
