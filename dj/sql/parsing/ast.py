@@ -16,7 +16,6 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    cast,
 )
 
 from dj.sql.parsing.backends.exceptions import DJParseException
@@ -221,9 +220,9 @@ class Node(ABC):
         for node in chain(*[child.filter(func) for child in self.children]):
             yield node
 
-    def find_all(self, node_type: TNode) -> Iterator[TNode]:
+    def find_all(self, node_type: Type[TNode]) -> Iterator[TNode]:
         """find all nodes of a particular type in the node's sub-ast"""
-        return cast(self.filter(lambda n: isinstance(n, node_type)), Iterator[TNode])
+        return self.filter(lambda n: isinstance(n, node_type))  # type: ignore
 
     def apply(self, func: Callable[["Node"], None]):
         """

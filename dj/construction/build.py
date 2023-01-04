@@ -4,7 +4,6 @@ Functions for building queries, from nodes or SQL.
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import reduce
 from itertools import chain
 from string import ascii_letters, digits
 from typing import Dict, Generator, List, Optional, Set, Tuple, Union
@@ -209,7 +208,7 @@ def get_dj_node(
     if match and kinds and (match.type not in kinds):
         with CompoundBuildException().catch:
             raise NodeTypeException(
-                f"Node `{match.name}` is of type `{str(match.type).upper()}`. Expected kind to be of {' or '.join(str(k) for k in kinds)}.",
+                f"Node `{match.name}` is of type `{str(match.type).upper()}`. Expected kind to be of {' or '.join(str(k) for k in kinds)}.",  # pylint: disable=C0301
                 node_name,
             )
 
@@ -220,21 +219,23 @@ def get_dj_node(
 class ColumnDependencies:
     """Columns discovered from a query"""
 
-    projection: List[Tuple[ASTNode, ASTNode]] = field(
+    projection: List[Tuple[Column, TableExpression]] = field(
         default_factory=list,
     )  # selected nodes
-    group_by: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(default_factory=list)
-    filters: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(
+    group_by: List[Tuple[Column, Union[TableExpression, Node]]] = field(
+        default_factory=list,
+    )
+    filters: List[Tuple[Column, Union[TableExpression, Node]]] = field(
         default_factory=list,
     )  # where/having
-    ons: List[Tuple[ASTNode, Union[ASTNode, Node]]] = field(
+    ons: List[Tuple[Column, Union[TableExpression, Node]]] = field(
         default_factory=list,
     )  # join ons
 
     @property
     def all_columns(
         self,
-    ) -> Generator[Tuple[ASTNode, Union[ASTNode, Node]], None, None]:
+    ) -> Generator[Tuple[Column, Union[TableExpression, Node]], None, None]:
         for pair in chain(
             iter(self.projection),
             iter(self.group_by),
@@ -246,12 +247,12 @@ class ColumnDependencies:
 
 @dataclass
 class SelectDependencies:
-    tables: List[Tuple[ASTNode, Node]] = field(default_factory=list)
+    tables: List[Tuple[TableExpression, Node]] = field(default_factory=list)
     columns: ColumnDependencies = field(default_factory=ColumnDependencies)
     subqueries: List[Tuple[Select, "SelectDependencies"]] = field(default_factory=list)
 
     @property
-    def all_tables(self) -> Generator[Tuple[ASTNode, Node], None, None]:
+    def all_tables(self) -> Generator[Tuple[TableExpression, Node], None, None]:
         for t in self.tables:
             yield t
         for _, s in self.subqueries:
@@ -285,7 +286,8 @@ def extract_dependencies_from_select(
 ) -> SelectDependencies:
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
-    # then we check the select, groupby, having/where for the columns keeping track of where they came from
+    # then we check the select, groupby,
+    # having/where for the columns keeping track of where they came from
 
     table_deps = SelectDependencies()
 
@@ -401,41 +403,33 @@ def extract_dependencies_from_select(
                     f"Column `{col.name.name}` does not exist in any referenced tables."
                 )
                 if col.name.name in multiple_refs:
-                    exc_msg = f"`{col.name.name}` has multiple references and so must be namespaced."
+                    exc_msg = f"`{col.name.name}` appears in multiple references and so must be namespaced."  # pylint: disable=C0301
             with CompoundBuildException().catch:
-                MissingColumnException(exc_msg, col, col.parent)
+                raise MissingColumnException(exc_msg, col, col.parent)
 
             return None
         elif namespace:
             add.append((col, table_nodes[namespace]))
-            if (
-                isinstance(table_nodes[namespace], Node)
-                and table_nodes[namespace].type == NodeType.DIMENSION
-            ):
-                dimension_columns.add(table_nodes[namespace])
         else:
             for k, v in namespaces.items():
                 if col.name.name in v:
                     add.append((col, table_nodes[k]))
-                    if (
-                        isinstance(table_nodes[k], Node)
-                        and table_nodes[k].type == NodeType.DIMENSION
-                    ):
-                        dimension_columns.add(table_nodes[k])
-                break
+                    break
         return namespace
 
     # check projection
-    for col in flatten(exp.find_all(Column) for exp in select.projection):
-        namespace = check_col(col, table_deps.columns.projection)
+    for col in chain(*(exp.find_all(Column) for exp in select.projection)):
+        check_col(col, table_deps.columns.projection)  # type: ignore
 
     # check groupby, filters, and join ons
-    gbfo = []
+    gbfo: List[
+        Tuple[List[Tuple[Column, Union[TableExpression, Node]]], Column, bool]
+    ] = []
 
     if select.group_by:
         gbfo += [
             (table_deps.columns.group_by, col, True)
-            for col in flatten(exp.find_all(Column) for exp in select.group_by)
+            for col in chain(*(exp.find_all(Column) for exp in select.group_by))
         ]
         if select.having:
             gbfo += [
@@ -465,7 +459,7 @@ def extract_dependencies_from_select(
     for add, col, dim_allowed in gbfo:
         bad_namespace = False
         try:
-            namespace = check_col(col, add)
+            namespace = check_col(col, add)  # type: ignore
             bad_namespace = namespace is None
         except BuildException:
             bad_namespace = True
@@ -509,7 +503,7 @@ def extract_dependencies_from_select(
         if not joinable:
             with CompoundBuildException().catch:
                 NodeTypeException(
-                    f"Dimension `{dim.name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause.",
+                    f"Dimension `{dim.name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause.",  # pylint: disable=C0301
                     dim,
                     select.from_,
                 )
@@ -543,187 +537,192 @@ def extract_dependencies(
 ) -> Tuple[Set[Node], Set[str]]:
     """Find all dependencies in the dj dag of a node
 
-    distance: how many steps away to explore. <0 infinitely far, 0 only neighbors e.g. only nodes referenced directly in the node query
+    distance: how many steps away to explore.
+        <0 infinitely far,
+        0 only neighbors e.g. only nodes referenced directly in the node query
     """
     _distance = float("inf") if distance < 0 else float(distance)
+    if node.query is None:
+        raise Exception("Node has no query")
     ast = parse(node.query, dialect)
     CompoundBuildException().reset()
     CompoundBuildException().set_raise(False)
-    deps = extract_dependencies_from_query(session, ast)
-    dep_nodes = deps.all_node_dependencies
+    deps: QueryDependencies = extract_dependencies_from_query(session, ast)
+    dep_nodes: Tuple[Set[Node], Set[str]] = (deps.all_node_dependencies, set())
     added = True
     travelled = 0
-    new = set()
+    new: Tuple[Set[Node], Set[str]] = (set(), set())
     while added and travelled < _distance:
-        for dep_node in dep_nodes:
+        for dep_node in dep_nodes[0]:
             if dep_node.type != NodeType.SOURCE:
-                new |= extract_dependencies(session, dep_node, dialect)
+                extract = extract_dependencies(session, dep_node, dialect)
+                new = (new[0] | extract[0], new[1] | extract[1])
         curr_len = len(dep_nodes)
-        dep_nodes |= new
+        dep_nodes = (new[0] | dep_nodes[0], new[1] | dep_nodes[1])
         if curr_len != len(dep_nodes):
             added = True
         else:
             added = False
         travelled += 1
 
-    if CompoundBuildException().exceptions and raise_:
+    if CompoundBuildException().errors and raise_:
         raise CompoundBuildException()
 
-    invalid = set()
-    for exc in CompoundBuildException().exceptions:
-        if type(exc) in {UnknownNodeException, NodeTypeException}:
-            invalid.add(exc.node)
+    for exc in CompoundBuildException().errors:
+        if isinstance(exc, (UnknownNodeException, NodeTypeException)):
+            dep_nodes[1].add(exc.node)
 
-    return dep_nodes, invalid
-
-
-# flake8: noqa: C901
-def build_select(
-    session: Session,
-    select: Select,
-    deps: SelectDependencies,
-    dialect: Optional[str] = None,
-) -> Select:
-    # roll nodes up into categories
-    # we roll up so we only handle a node once for all references
-    dimension_columns: Dict[str, Tuple[Node, List[Column]]] = dict()
-    transforms: Dict[str, Tuple[Node, List[Table]]] = dict()
-    sources: Dict[str, Tuple[Node, List[Table]]] = dict()
-    dimensions_tables: Dict[str, Tuple[Node, List[Table]]] = dict()
-
-    for col, ref_node in deps.columns.all_columns:
-        if isinstance(ref_node, Node) and ref_node.type == NodeType.DIMENSION:
-            if ref_node.name in dimension_columns:
-                dimension_columns[ref_node.name][1].append(col)
-            else:
-                dimension_columns[ref_node.name] = (ref_node, [col])
-
-    for ref, ref_node in deps.tables:
-        if ref_node.type == NodeType.DIMENSION:
-            if ref_node.name in dimensions_tables:
-                dimensions_tables[ref_node.name][1].append(ref)
-            else:
-                dimensions_tables[ref_node.name] = (ref_node, [ref])
-
-        if ref_node.type == NodeType.SOURCE:
-            if ref_node.name in sources:
-                sources[ref_node.name][1].append(ref)
-            else:
-                sources[ref_node.name] = (ref_node, [ref])
-
-        if ref_node.type == NodeType.TRANSFORM:
-            if ref_node.name in transforms:
-                transforms[ref_node.name][1].append(ref)
-            else:
-                transforms[ref_node.name] = (ref_node, [ref])
-
-    # handle dimensions; join if needed
-    for dim_name, (dim, cols) in dimension_columns.items():
-        # if the dimension was not used as a table we will need to join
-        if dim_name not in dimensions_tables:
-            # alias used for the dimension throughout the query
-            alias = amenable_name(dim.name)
-            # find all sources, transforms and dimension tables that can join the dimension
-            joinable = False
-            join_info = dict()
-            # str, (DJ Node, [AST Table Node])
-            for table_name, (table_node, tables) in chain(
-                transforms.items(),
-                sources.items(),
-                dimensions_tables.items(),
-            ):
-                dim_cols = [col for col in table_node.columns if col.dimension == dim]
-                join_info[table_name] = (
-                    tables,
-                    dim_cols,
-                )
-                if dim_cols:
-                    joinable = True
-            if not joinable:
-                raise Exception(
-                    f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`.""",
-                )
-
-            dim_ast = Alias(Name(alias), child=parse(dim.query, dialect))
-
-            # AST Column
-            for col in cols:
-                col.namespace = Namespace([Name(alias)])
-
-            joins = []
-            # [AST Table], [DJ Node Column]
-            for tables, cols in join_info.values():
-                for table in tables:
-                    on = []
-                    for col in cols:
-                        on.append(
-                            BinaryOp(
-                                BinaryOpKind.Eq,
-                                Column(Name(col.name), _table=table),
-                                Column(
-                                    Name(col.dimension_column),
-                                    Namespace([Name(alias)]),
-                                ),
-                            ),
-                        )
-                joins.append(
-                    Join(
-                        JoinKind.LeftOuterdim_ast,
-                        reduce(lambda l, r: BinaryOp(BinaryOpKind.And, l, r), on),
-                    ),
-                )
-
-            select.from_.joins += joins
-
-    # handle all nodes referenced as tables
-    for node_name, (node, tables) in chain(
-        transforms.items(),
-        dimensions_tables.items(),
-    ):
-        alias = amenable_name(node.name)
-        table_ast = Alias(Name(alias), child=parse(node.query, dialect))
-
-        for table in tables:
-            parent = table.parent
-            parent.replace(table, table_ast)
-            if not isinstance(
-                parent,
-                Alias,
-            ):  # if the table is not already aliased we will need to alias it and replace column refs
-                for (
-                    col,
-                    node,
-                ) in (
-                    deps.columns.all_columns
-                ):  # find columns that referenced the table to replace their namespace
-                    if isinstance(node, ASTNode):
-                        if id(node) == id(table):
-                            col.namespace = Namespace([Name(alias)])
-
-    #     for source, (source_node, table) in sources.items():
-
-    for subquery, subquery_deps in deps.subqueries:
-        build_select(session, subquery, subquery_deps, dialect)
+    return dep_nodes
 
 
-def build_query(
-    session: Session,
-    query: Query,
-    deps: QueryDependencies,
-    dialect: Optional[str] = None,
-):
-    build_select(session, query.select, deps.select, dialect)
+# # flake8: noqa: C901
+# def build_select(
+#     session: Session,
+#     select: Select,
+#     deps: SelectDependencies,
+#     dialect: Optional[str] = None,
+# ):
+#     # roll nodes up into categories
+#     # we roll up so we only handle a node once for all references
+#     dimension_columns: Dict[str, Tuple[Node, List[Column]]] = dict()
+#     transforms: Dict[str, Tuple[Node, List[Table]]] = dict()
+#     sources: Dict[str, Tuple[Node, List[Table]]] = dict()
+#     dimensions_tables: Dict[str, Tuple[Node, List[Table]]] = dict()
+
+#     for col, ref_node in deps.columns.all_columns:
+#         if isinstance(ref_node, Node) and ref_node.type == NodeType.DIMENSION:
+#             if ref_node.name in dimension_columns:
+#                 dimension_columns[ref_node.name][1].append(col)
+#             else:
+#                 dimension_columns[ref_node.name] = (ref_node, [col])
+
+#     for ref, ref_node in deps.tables:
+#         if ref_node.type == NodeType.DIMENSION:
+#             if ref_node.name in dimensions_tables:
+#                 dimensions_tables[ref_node.name][1].append(ref)
+#             else:
+#                 dimensions_tables[ref_node.name] = (ref_node, [ref])
+
+#         if ref_node.type == NodeType.SOURCE:
+#             if ref_node.name in sources:
+#                 sources[ref_node.name][1].append(ref)
+#             else:
+#                 sources[ref_node.name] = (ref_node, [ref])
+
+#         if ref_node.type == NodeType.TRANSFORM:
+#             if ref_node.name in transforms:
+#                 transforms[ref_node.name][1].append(ref)
+#             else:
+#                 transforms[ref_node.name] = (ref_node, [ref])
+
+#     # handle dimensions; join if needed
+#     for dim_name, (dim, cols) in dimension_columns.items():
+#         # if the dimension was not used as a table we will need to join
+#         if dim_name not in dimensions_tables:
+#             # alias used for the dimension throughout the query
+#             alias = amenable_name(dim.name)
+#             # find all sources, transforms and dimension tables that can join the dimension
+#             joinable = False
+#             join_info = dict()
+#             # str, (DJ Node, [AST Table Node])
+#             for table_name, (table_node, tables) in chain(
+#                 transforms.items(),
+#                 sources.items(),
+#                 dimensions_tables.items(),
+#             ):
+#                 dim_cols = [col for col in table_node.columns if col.dimension == dim]
+#                 join_info[table_name] = (
+#                     tables,
+#                     dim_cols,
+#                 )
+#                 if dim_cols:
+#                     joinable = True
+#             if not joinable:
+#                 raise Exception(
+#                     f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`.""",
+#                 )
+
+#             dim_ast = Alias(Name(alias), child=parse(dim.query, dialect))
+
+#             # AST Column
+#             for col in cols:
+#                 col.namespace = Namespace([Name(alias)])
+
+#             joins: List[Join] = []
+#             # [AST Table], [DJ Node Column]
+#             for tables, cols in join_info.values():
+#                 for table in tables:
+#                     on = []
+#                     for col in cols:
+#                         on.append(
+#                             BinaryOp(
+#                                 BinaryOpKind.Eq,
+#                                 Column(Name(col.name), _table=table),
+#                                 Column(
+#                                     Name(col.dimension_column),
+#                                     Namespace([Name(alias)]),
+#                                 ),
+#                             ),
+#                         )
+#                 joins.append(
+#                     Join(
+#                         JoinKind.LeftOuterdim,
+#                         dim_ast,
+#                         reduce(lambda l, r: BinaryOp(BinaryOpKind.And, l, r), on),
+#                     ),
+#                 )
+
+#             select.from_.joins += joins
+
+#     # handle all nodes referenced as tables
+#     for node_name, (node, tables) in chain(
+#         transforms.items(),
+#         dimensions_tables.items(),
+#     ):
+#         alias = amenable_name(node.name)
+#         table_ast = Alias(Name(alias), child=parse(node.query, dialect))
+
+#         for table in tables:
+#             parent = table.parent
+#             parent.replace(table, table_ast)
+#             if not isinstance(
+#                 parent,
+#                 Alias,
+#             ):  # if the table is not already aliased we will need to alias it and replace column refs
+#                 for (
+#                     col,
+#                     node,
+#                 ) in (
+#                     deps.columns.all_columns
+#                 ):  # find columns that referenced the table to replace their namespace
+#                     if isinstance(node, ASTNode):
+#                         if id(node) == id(table):
+#                             col.namespace = Namespace([Name(alias)])
+
+#     # We do not do anything about source nodes - for source, (source_node, table) in sources.items():
+
+#     for subquery, subquery_deps in deps.subqueries:
+#         build_select(session, subquery, subquery_deps, dialect)
 
 
-@dataclass
-class DJQuery:
-    ast: Query
-    dependencies: QueryDependencies = field(default_factory=QueryDependencies)
+# def build_query(
+#     session: Session,
+#     query: Query,
+#     deps: QueryDependencies,
+#     dialect: Optional[str] = None,
+# ):
+#     build_select(session, query.select, deps.select, dialect)
 
 
-def build_node(session: Session, node: Node, dialect: Optional[str] = None) -> DJQuery:
-    query = parse(node.query, dialect)
-    CompoundBuildException().set_raise(True)
-    deps = extract_dependencies_from_query(session, query)
-    build_query(session, query, deps, dialect)
-    return DJQuery(query, deps)
+# @dataclass
+# class DJQuery:
+#     ast: Query
+#     dependencies: QueryDependencies = field(default_factory=QueryDependencies)
+
+
+# def build_node(session: Session, node: Node, dialect: Optional[str] = None) -> DJQuery:
+#     query = parse(node.query, dialect)
+#     CompoundBuildException().set_raise(True)
+#     deps = extract_dependencies_from_query(session, query)
+#     build_query(session, query, deps, dialect)
+#     return DJQuery(query, deps)
