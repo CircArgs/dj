@@ -204,15 +204,6 @@ def test_flatten():
     ) == [1, 1, 2, 3, range(0, 5), 8, 18, 4, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
 
 
-def test_remove_parents():
-    """
-    test removing parents
-    """
-    col = Column(Name("x"))
-    col.name.remove_parents(col)
-    assert col.name.parents == set()
-
-
 def test_empty_namespace_conversion_raises():
     """
     test if an empty namespace conversion raises

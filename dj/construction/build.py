@@ -5,7 +5,6 @@ Functions for building queries, from nodes or SQL.
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
-from string import ascii_letters, digits
 from typing import Dict, Generator, List, Optional, Set, Tuple, Union
 
 from sqlalchemy.orm.exc import NoResultFound
@@ -26,48 +25,6 @@ from dj.sql.parsing.ast import (
 from dj.sql.parsing.ast import Node as ASTNode
 from dj.sql.parsing.ast import Query, Select, Table, TableExpression, flatten
 from dj.sql.parsing.backends.sqloxide import parse
-
-ACCEPTABLE_CHARS = set(ascii_letters + digits + "_")
-LOOKUP_CHARS = {
-    ".": "DOT",
-    "'": "QUOTE",
-    '"': "DQUOTE",
-    "`": "BTICK",
-    "!": "EXCL",
-    "@": "AT",
-    "#": "HASH",
-    "$": "DOLLAR",
-    "%": "PERC",
-    "^": "CARAT",
-    "&": "AMP",
-    "*": "STAR",
-    "(": "LPAREN",
-    ")": "RPAREN",
-    "[": "LBRACK",
-    "]": "RBRACK",
-    "-": "MINUS",
-    "+": "PLUS",
-    "=": "EQ",
-}
-
-
-def amenable_name(name: str) -> str:
-    """Takes a string and makes it have only alphanumerics/_"""
-    ret = []
-    cont = []
-    for c in name:
-        if c in ACCEPTABLE_CHARS:
-            cont.append(c)
-        elif c in LOOKUP_CHARS:
-            ret.append("".join(cont))
-            ret.append(LOOKUP_CHARS[c])
-            cont = []
-        else:
-            ret.append("".join(cont))
-            ret.append("_")
-            cont = []
-
-    return "_".join(ret) + "_" + "".join(cont)
 
 
 def make_name(namespace, name="") -> str:
@@ -145,6 +102,8 @@ class NodeTypeException(BuildException):
 
 
 class CompoundBuildException(BuildException):
+    """Exception singleton to optionally build up exceptions or raise"""
+
     _instance: Optional["CompoundBuildException"] = None
     _raise: bool = True
     errors: List[BuildException]
@@ -158,18 +117,22 @@ class CompoundBuildException(BuildException):
         return cls._instance
 
     def reset(self):
+        """resets the singleton"""
         self._raise = True
         self.errors = []
 
     def clear(self):
+        """erases stored exceptions"""
         self.errors = []
 
     def set_raise(self, raise_: bool):
+        """set whether to raise caught exceptions or build them up"""
         self._raise = raise_
 
     @property  # type: ignore
     @contextmanager
     def catch(self):
+        """context manager used to wrap raising exceptions"""
         try:
             yield
         except BuildException as exc:
@@ -236,6 +199,7 @@ class ColumnDependencies:
     def all_columns(
         self,
     ) -> Generator[Tuple[Column, Union[TableExpression, Node]], None, None]:
+        """get all column, node pairs"""
         for pair in chain(
             iter(self.projection),
             iter(self.group_by),
@@ -247,12 +211,14 @@ class ColumnDependencies:
 
 @dataclass
 class SelectDependencies:
+    """stores all the dependencies found in a select statement"""
     tables: List[Tuple[TableExpression, Node]] = field(default_factory=list)
     columns: ColumnDependencies = field(default_factory=ColumnDependencies)
     subqueries: List[Tuple[Select, "SelectDependencies"]] = field(default_factory=list)
 
     @property
     def all_tables(self) -> Generator[Tuple[TableExpression, Node], None, None]:
+        "get all table node, dj node pairs"
         for t in self.tables:
             yield t
         for _, s in self.subqueries:
@@ -261,6 +227,7 @@ class SelectDependencies:
 
     @property
     def all_node_dependencies(self) -> Set[Node]:
+        """get all dj nodes referenced"""
         return {node for _, node in self.all_tables if isinstance(node, Node)} | {
             node for _, node in self.columns.all_columns if isinstance(node, Node)
         }
@@ -268,11 +235,13 @@ class SelectDependencies:
 
 @dataclass
 class QueryDependencies:
+    """stores all dependencies found in a query statement"""
     ctes: List[SelectDependencies] = field(default_factory=list)
     select: SelectDependencies = field(default_factory=SelectDependencies)
 
     @property
     def all_node_dependencies(self) -> Set[Node]:
+        """get all dj nodes referenced"""
         ret = self.select.all_node_dependencies
         for cte_deps in self.ctes:
             ret |= cte_deps.all_node_dependencies
@@ -284,6 +253,7 @@ def extract_dependencies_from_select(
     session: Session,
     select: Select,
 ) -> SelectDependencies:
+    """get all dj node dependencies from a sql select while validating"""
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
     # then we check the select, groupby,
@@ -523,6 +493,7 @@ def extract_dependencies_from_query(
     session: Session,
     query: Query,
 ) -> QueryDependencies:
+    """get all dj node dependencies from a sql query while validating"""
     return QueryDependencies(
         select=extract_dependencies_from_select(session, query.select),
     )
@@ -573,156 +544,3 @@ def extract_dependencies(
             dep_nodes[1].add(exc.node)
 
     return dep_nodes
-
-
-# # flake8: noqa: C901
-# def build_select(
-#     session: Session,
-#     select: Select,
-#     deps: SelectDependencies,
-#     dialect: Optional[str] = None,
-# ):
-#     # roll nodes up into categories
-#     # we roll up so we only handle a node once for all references
-#     dimension_columns: Dict[str, Tuple[Node, List[Column]]] = dict()
-#     transforms: Dict[str, Tuple[Node, List[Table]]] = dict()
-#     sources: Dict[str, Tuple[Node, List[Table]]] = dict()
-#     dimensions_tables: Dict[str, Tuple[Node, List[Table]]] = dict()
-
-#     for col, ref_node in deps.columns.all_columns:
-#         if isinstance(ref_node, Node) and ref_node.type == NodeType.DIMENSION:
-#             if ref_node.name in dimension_columns:
-#                 dimension_columns[ref_node.name][1].append(col)
-#             else:
-#                 dimension_columns[ref_node.name] = (ref_node, [col])
-
-#     for ref, ref_node in deps.tables:
-#         if ref_node.type == NodeType.DIMENSION:
-#             if ref_node.name in dimensions_tables:
-#                 dimensions_tables[ref_node.name][1].append(ref)
-#             else:
-#                 dimensions_tables[ref_node.name] = (ref_node, [ref])
-
-#         if ref_node.type == NodeType.SOURCE:
-#             if ref_node.name in sources:
-#                 sources[ref_node.name][1].append(ref)
-#             else:
-#                 sources[ref_node.name] = (ref_node, [ref])
-
-#         if ref_node.type == NodeType.TRANSFORM:
-#             if ref_node.name in transforms:
-#                 transforms[ref_node.name][1].append(ref)
-#             else:
-#                 transforms[ref_node.name] = (ref_node, [ref])
-
-#     # handle dimensions; join if needed
-#     for dim_name, (dim, cols) in dimension_columns.items():
-#         # if the dimension was not used as a table we will need to join
-#         if dim_name not in dimensions_tables:
-#             # alias used for the dimension throughout the query
-#             alias = amenable_name(dim.name)
-#             # find all sources, transforms and dimension tables that can join the dimension
-#             joinable = False
-#             join_info = dict()
-#             # str, (DJ Node, [AST Table Node])
-#             for table_name, (table_node, tables) in chain(
-#                 transforms.items(),
-#                 sources.items(),
-#                 dimensions_tables.items(),
-#             ):
-#                 dim_cols = [col for col in table_node.columns if col.dimension == dim]
-#                 join_info[table_name] = (
-#                     tables,
-#                     dim_cols,
-#                 )
-#                 if dim_cols:
-#                     joinable = True
-#             if not joinable:
-#                 raise Exception(
-#                     f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`.""",
-#                 )
-
-#             dim_ast = Alias(Name(alias), child=parse(dim.query, dialect))
-
-#             # AST Column
-#             for col in cols:
-#                 col.namespace = Namespace([Name(alias)])
-
-#             joins: List[Join] = []
-#             # [AST Table], [DJ Node Column]
-#             for tables, cols in join_info.values():
-#                 for table in tables:
-#                     on = []
-#                     for col in cols:
-#                         on.append(
-#                             BinaryOp(
-#                                 BinaryOpKind.Eq,
-#                                 Column(Name(col.name), _table=table),
-#                                 Column(
-#                                     Name(col.dimension_column),
-#                                     Namespace([Name(alias)]),
-#                                 ),
-#                             ),
-#                         )
-#                 joins.append(
-#                     Join(
-#                         JoinKind.LeftOuterdim,
-#                         dim_ast,
-#                         reduce(lambda l, r: BinaryOp(BinaryOpKind.And, l, r), on),
-#                     ),
-#                 )
-
-#             select.from_.joins += joins
-
-#     # handle all nodes referenced as tables
-#     for node_name, (node, tables) in chain(
-#         transforms.items(),
-#         dimensions_tables.items(),
-#     ):
-#         alias = amenable_name(node.name)
-#         table_ast = Alias(Name(alias), child=parse(node.query, dialect))
-
-#         for table in tables:
-#             parent = table.parent
-#             parent.replace(table, table_ast)
-#             if not isinstance(
-#                 parent,
-#                 Alias,
-#             ):  # if the table is not already aliased we will need to alias it and replace column refs
-#                 for (
-#                     col,
-#                     node,
-#                 ) in (
-#                     deps.columns.all_columns
-#                 ):  # find columns that referenced the table to replace their namespace
-#                     if isinstance(node, ASTNode):
-#                         if id(node) == id(table):
-#                             col.namespace = Namespace([Name(alias)])
-
-#     # We do not do anything about source nodes - for source, (source_node, table) in sources.items():
-
-#     for subquery, subquery_deps in deps.subqueries:
-#         build_select(session, subquery, subquery_deps, dialect)
-
-
-# def build_query(
-#     session: Session,
-#     query: Query,
-#     deps: QueryDependencies,
-#     dialect: Optional[str] = None,
-# ):
-#     build_select(session, query.select, deps.select, dialect)
-
-
-# @dataclass
-# class DJQuery:
-#     ast: Query
-#     dependencies: QueryDependencies = field(default_factory=QueryDependencies)
-
-
-# def build_node(session: Session, node: Node, dialect: Optional[str] = None) -> DJQuery:
-#     query = parse(node.query, dialect)
-#     CompoundBuildException().set_raise(True)
-#     deps = extract_dependencies_from_query(session, query)
-#     build_query(session, query, deps, dialect)
-#     return DJQuery(query, deps)
