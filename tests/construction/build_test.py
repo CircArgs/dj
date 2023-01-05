@@ -549,36 +549,42 @@ class TestExtractingDependencies:
         )
         query_dependencies = extract_dependencies_from_query(session, query)
         dependencies = query_dependencies.select
-        assert hash(dependencies.columns.all_columns) == hash(
-            ColumnDependencies(
-                projection=[
-                    (
-                        ASTColumn(
-                            name=Name(name="transaction_id", quote_style=""),
-                            namespace=Namespace(
-                                names=[Name(name="r2", quote_style="")]
-                            ),
-                        ),
-                        Table(
-                            name=Name(name="returns", quote_style=""), namespace=None
-                        ),
+        assert dependencies.columns == ColumnDependencies(
+            projection=[
+                (
+                    ASTColumn(
+                        name=Name(name="transaction_id", quote_style=""),
+                        namespace=Namespace(names=[Name(name="r2", quote_style="")]),
                     ),
-                ],
-                group_by=[],
-                filters=[
-                    (
-                        ASTColumn(
-                            name=Name(name="transaction_id", quote_style=""),
-                            namespace=Namespace(
-                                names=[Name(name="r2", quote_style="")]
-                            ),
-                        ),
-                        Table(
-                            name=Name(name="returns", quote_style=""), namespace=None
-                        ),
+                    Table(name=Name(name="returns", quote_style=""), namespace=None),
+                ),
+            ],
+            group_by=[],
+            filters=[
+                (
+                    ASTColumn(
+                        name=Name(name="transaction_id", quote_style=""),
+                        namespace=Namespace(names=[Name(name="r2", quote_style="")]),
                     ),
-                ],
-            ).all_columns
+                    Table(name=Name(name="returns", quote_style=""), namespace=None),
+                ),
+            ],
+            ons=[
+                (
+                    ASTColumn(
+                        name=Name(name="purchase_transaction_id", quote_style=""),
+                        namespace=Namespace(names=[Name(name="r1", quote_style="")]),
+                    ),
+                    Table(name=Name(name="returns", quote_style=""), namespace=None),
+                ),
+                (
+                    ASTColumn(
+                        name=Name(name="transaction_id", quote_style=""),
+                        namespace=Namespace(names=[Name(name="r2", quote_style="")]),
+                    ),
+                    Table(name=Name(name="returns", quote_style=""), namespace=None),
+                ),
+            ],
         )
 
         assert len(dependencies.tables) == 2
@@ -725,7 +731,7 @@ class TestExtractingDependencies:
             SELECT event_id, event_time, message
             FROM customer_events ce
             LEFT JOIN event_type et
-            ON ce.event_type = et.id
+            ON ce.event_type = et.event_type
             """,
             "hive",
         )
@@ -898,302 +904,255 @@ class TestExtractingDependencies:
         query_dependencies = extract_dependencies_from_query(session, query)
         dependencies = query_dependencies.select
 
-        assert len(list(dependencies.all_tables)) == 1
+        assert len(list(dependencies.all_tables)) == 2
         assert dependencies.columns == ColumnDependencies(
             projection=[
                 (
                     ASTColumn(
-                        name=Name(name="event_time", quote_style=""),
-                        namespace=None,
+                        name=Name(name="event_time", quote_style=""), namespace=None,
                     ),
-                    Query(
-                        select=Select(
-                            from_=From(
-                                tables=[
-                                    Query(
-                                        select=Select(
-                                            from_=From(
-                                                tables=[
-                                                    Alias(
+                    Select(
+                        from_=From(
+                            tables=[
+                                Select(
+                                    from_=From(
+                                        tables=[
+                                            Alias(
+                                                name=Name(name="ce", quote_style=""),
+                                                namespace=None,
+                                                child=Table(
+                                                    name=Name(
+                                                        name="customer_events",
+                                                        quote_style="",
+                                                    ),
+                                                    namespace=None,
+                                                ),
+                                            ),
+                                        ],
+                                        joins=[
+                                            Join(
+                                                kind=JoinKind.LeftOuter,
+                                                table=Alias(
+                                                    name=Name(
+                                                        name="et", quote_style="",
+                                                    ),
+                                                    namespace=None,
+                                                    child=Table(
                                                         name=Name(
-                                                            name="ce",
+                                                            name="purchases",
                                                             quote_style="",
                                                         ),
                                                         namespace=None,
-                                                        child=Table(
-                                                            name=Name(
-                                                                name="customer_events",
-                                                                quote_style="",
-                                                            ),
-                                                            namespace=None,
+                                                    ),
+                                                ),
+                                                on=BinaryOp(
+                                                    op=BinaryOpKind.Eq,
+                                                    left=ASTColumn(
+                                                        name=Name(
+                                                            name="event_id",
+                                                            quote_style="",
+                                                        ),
+                                                        namespace=Namespace(
+                                                            names=[
+                                                                Name(
+                                                                    name="ce",
+                                                                    quote_style="",
+                                                                ),
+                                                            ],
                                                         ),
                                                     ),
-                                                ],
-                                                joins=[
-                                                    Join(
-                                                        kind=JoinKind.LeftOuter,
-                                                        table=Alias(
-                                                            name=Name(
-                                                                name="et",
-                                                                quote_style="",
-                                                            ),
-                                                            namespace=None,
-                                                            child=Table(
-                                                                name=Name(
-                                                                    name="purchases",
-                                                                    quote_style="",
-                                                                ),
-                                                                namespace=None,
-                                                            ),
+                                                    right=ASTColumn(
+                                                        name=Name(
+                                                            name="transaction_id",
+                                                            quote_style="",
                                                         ),
-                                                        on=BinaryOp(
-                                                            left=ASTColumn(
-                                                                name=Name(
-                                                                    name="event_id",
+                                                        namespace=Namespace(
+                                                            names=[
+                                                                Name(
+                                                                    name="et",
                                                                     quote_style="",
                                                                 ),
-                                                                namespace=Namespace(
-                                                                    names=[
-                                                                        Name(
-                                                                            name="ce",
-                                                                            quote_style="",
-                                                                        ),
-                                                                    ],
-                                                                ),
-                                                            ),
-                                                            op=BinaryOpKind.Eq,
-                                                            right=ASTColumn(
-                                                                name=Name(
-                                                                    name="transaction_id",
-                                                                    quote_style="",
-                                                                ),
-                                                                namespace=Namespace(
-                                                                    names=[
-                                                                        Name(
-                                                                            name="et",
-                                                                            quote_style="",
-                                                                        ),
-                                                                    ],
-                                                                ),
-                                                            ),
+                                                            ],
                                                         ),
                                                     ),
-                                                ],
+                                                ),
                                             ),
-                                            group_by=[],
-                                            having=None,
-                                            projection=[
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="event_id",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="event_time",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="message",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                            ],
-                                            where=BinaryOp(
-                                                left=ASTColumn(
-                                                    name=Name(
-                                                        name="event_type",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=Namespace(
-                                                        names=[
-                                                            Name(
-                                                                name="ce",
-                                                                quote_style="",
-                                                            ),
-                                                        ],
-                                                    ),
-                                                ),
-                                                op=BinaryOpKind.Eq,
-                                                right=String(value="TRANSACTION"),
-                                            ),
-                                            limit=None,
-                                            distinct=False,
-                                        ),
-                                        ctes=[],
+                                        ],
                                     ),
-                                ],
-                                joins=[],
-                            ),
-                            group_by=[],
-                            having=None,
-                            projection=[
-                                ASTColumn(
-                                    name=Name(name="event_time", quote_style=""),
-                                    namespace=None,
+                                    group_by=[],
+                                    having=None,
+                                    projection=[
+                                        ASTColumn(
+                                            name=Name(name="event_id", quote_style=""),
+                                            namespace=None,
+                                        ),
+                                        ASTColumn(
+                                            name=Name(
+                                                name="event_time", quote_style="",
+                                            ),
+                                            namespace=None,
+                                        ),
+                                        ASTColumn(
+                                            name=Name(name="message", quote_style=""),
+                                            namespace=None,
+                                        ),
+                                    ],
+                                    where=BinaryOp(
+                                        op=BinaryOpKind.Eq,
+                                        left=ASTColumn(
+                                            name=Name(
+                                                name="event_type", quote_style="",
+                                            ),
+                                            namespace=Namespace(
+                                                names=[Name(name="ce", quote_style="")],
+                                            ),
+                                        ),
+                                        right=String(value="TRANSACTION"),
+                                    ),
+                                    limit=None,
+                                    distinct=False,
                                 ),
                             ],
-                            where=None,
-                            limit=None,
-                            distinct=False,
+                            joins=[],
                         ),
-                        ctes=[],
+                        group_by=[],
+                        having=None,
+                        projection=[
+                            ASTColumn(
+                                name=Name(name="event_time", quote_style=""),
+                                namespace=None,
+                            ),
+                        ],
+                        where=None,
+                        limit=None,
+                        distinct=False,
                     ),
                 ),
                 (
                     ASTColumn(
-                        name=Name(name="event_time", quote_style=""),
-                        namespace=None,
+                        name=Name(name="event_time", quote_style=""), namespace=None,
                     ),
-                    Query(
-                        select=Select(
-                            from_=From(
-                                tables=[
-                                    Query(
-                                        select=Select(
-                                            from_=From(
-                                                tables=[
-                                                    Alias(
+                    Select(
+                        from_=From(
+                            tables=[
+                                Select(
+                                    from_=From(
+                                        tables=[
+                                            Alias(
+                                                name=Name(name="ce", quote_style=""),
+                                                namespace=None,
+                                                child=Table(
+                                                    name=Name(
+                                                        name="customer_events",
+                                                        quote_style="",
+                                                    ),
+                                                    namespace=None,
+                                                ),
+                                            ),
+                                        ],
+                                        joins=[
+                                            Join(
+                                                kind=JoinKind.LeftOuter,
+                                                table=Alias(
+                                                    name=Name(
+                                                        name="et", quote_style="",
+                                                    ),
+                                                    namespace=None,
+                                                    child=Table(
                                                         name=Name(
-                                                            name="ce",
+                                                            name="purchases",
                                                             quote_style="",
                                                         ),
                                                         namespace=None,
-                                                        child=Table(
-                                                            name=Name(
-                                                                name="customer_events",
-                                                                quote_style="",
-                                                            ),
-                                                            namespace=None,
+                                                    ),
+                                                ),
+                                                on=BinaryOp(
+                                                    op=BinaryOpKind.Eq,
+                                                    left=ASTColumn(
+                                                        name=Name(
+                                                            name="event_id",
+                                                            quote_style="",
+                                                        ),
+                                                        namespace=Namespace(
+                                                            names=[
+                                                                Name(
+                                                                    name="ce",
+                                                                    quote_style="",
+                                                                ),
+                                                            ],
                                                         ),
                                                     ),
-                                                ],
-                                                joins=[
-                                                    Join(
-                                                        kind=JoinKind.LeftOuter,
-                                                        table=Alias(
-                                                            name=Name(
-                                                                name="et",
-                                                                quote_style="",
-                                                            ),
-                                                            namespace=None,
-                                                            child=Table(
-                                                                name=Name(
-                                                                    name="purchases",
-                                                                    quote_style="",
-                                                                ),
-                                                                namespace=None,
-                                                            ),
+                                                    right=ASTColumn(
+                                                        name=Name(
+                                                            name="transaction_id",
+                                                            quote_style="",
                                                         ),
-                                                        on=BinaryOp(
-                                                            left=ASTColumn(
-                                                                name=Name(
-                                                                    name="event_id",
+                                                        namespace=Namespace(
+                                                            names=[
+                                                                Name(
+                                                                    name="et",
                                                                     quote_style="",
                                                                 ),
-                                                                namespace=Namespace(
-                                                                    names=[
-                                                                        Name(
-                                                                            name="ce",
-                                                                            quote_style="",
-                                                                        ),
-                                                                    ],
-                                                                ),
-                                                            ),
-                                                            op=BinaryOpKind.Eq,
-                                                            right=ASTColumn(
-                                                                name=Name(
-                                                                    name="transaction_id",
-                                                                    quote_style="",
-                                                                ),
-                                                                namespace=Namespace(
-                                                                    names=[
-                                                                        Name(
-                                                                            name="et",
-                                                                            quote_style="",
-                                                                        ),
-                                                                    ],
-                                                                ),
-                                                            ),
+                                                            ],
                                                         ),
                                                     ),
-                                                ],
+                                                ),
                                             ),
-                                            group_by=[],
-                                            having=None,
-                                            projection=[
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="event_id",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="event_time",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                                ASTColumn(
-                                                    name=Name(
-                                                        name="message",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=None,
-                                                ),
-                                            ],
-                                            where=BinaryOp(
-                                                left=ASTColumn(
-                                                    name=Name(
-                                                        name="event_type",
-                                                        quote_style="",
-                                                    ),
-                                                    namespace=Namespace(
-                                                        names=[
-                                                            Name(
-                                                                name="ce",
-                                                                quote_style="",
-                                                            ),
-                                                        ],
-                                                    ),
-                                                ),
-                                                op=BinaryOpKind.Eq,
-                                                right=String(value="TRANSACTION"),
-                                            ),
-                                            limit=None,
-                                            distinct=False,
-                                        ),
-                                        ctes=[],
+                                        ],
                                     ),
-                                ],
-                                joins=[],
-                            ),
-                            group_by=[],
-                            having=None,
-                            projection=[
-                                ASTColumn(
-                                    name=Name(name="event_time", quote_style=""),
-                                    namespace=None,
+                                    group_by=[],
+                                    having=None,
+                                    projection=[
+                                        ASTColumn(
+                                            name=Name(name="event_id", quote_style=""),
+                                            namespace=None,
+                                        ),
+                                        ASTColumn(
+                                            name=Name(
+                                                name="event_time", quote_style="",
+                                            ),
+                                            namespace=None,
+                                        ),
+                                        ASTColumn(
+                                            name=Name(name="message", quote_style=""),
+                                            namespace=None,
+                                        ),
+                                    ],
+                                    where=BinaryOp(
+                                        op=BinaryOpKind.Eq,
+                                        left=ASTColumn(
+                                            name=Name(
+                                                name="event_type", quote_style="",
+                                            ),
+                                            namespace=Namespace(
+                                                names=[Name(name="ce", quote_style="")],
+                                            ),
+                                        ),
+                                        right=String(value="TRANSACTION"),
+                                    ),
+                                    limit=None,
+                                    distinct=False,
                                 ),
                             ],
-                            where=None,
-                            limit=None,
-                            distinct=False,
+                            joins=[],
                         ),
-                        ctes=[],
+                        group_by=[],
+                        having=None,
+                        projection=[
+                            ASTColumn(
+                                name=Name(name="event_time", quote_style=""),
+                                namespace=None,
+                            ),
+                        ],
+                        where=None,
+                        limit=None,
+                        distinct=False,
                     ),
                 ),
             ],
             group_by=[],
             filters=[],
+            ons=[],
         )
 
     def test_extract_dependencies_from_node(self, session: Session):
@@ -1226,11 +1185,11 @@ class TestExtractingDependencies:
 
         assert "Found 2 issues:" in str(exc_info.value)
         assert (
-            "MissingColumnException: `transaction_id` appears in multiple references and so must be namespaced."
+            "InvalidSQLException: `transaction_id` appears in multiple references and so must be namespaced."
             in str(exc_info.value)
         )
         assert (
-            "MissingColumnException: `transaction_time` appears in multiple references and so must be namespaced."
+            "InvalidSQLException: `transaction_time` appears in multiple references and so must be namespaced."
             in str(exc_info.value)
         )
 
