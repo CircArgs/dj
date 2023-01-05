@@ -1211,7 +1211,8 @@ class TestExtractingDependencies:
             select(Node).where(Node.name == "eligible_purchases"),
         ).one()
         node_dependencies = extract_dependencies(
-            session=session, node=eligible_purchases,
+            session=session,
+            node=eligible_purchases,
         )
 
         purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
@@ -1241,7 +1242,8 @@ class TestExtractingDependencies:
         )
 
     def test_extract_dependencies_from_node_with_unraised_exceptions(
-        self, session: Session,
+        self,
+        session: Session,
     ):
         """
         Test compound build exception when extracting dependencies and not raising on exceptions
@@ -1250,7 +1252,9 @@ class TestExtractingDependencies:
             select(Node).where(Node.name == "returned_transactions"),
         ).one()
         node_dependencies = extract_dependencies(
-            session=session, node=returned_transactions, raise_=False,
+            session=session,
+            node=returned_transactions,
+            raise_=False,
         )
 
         purchases = session.exec(select(Node).where(Node.name == "purchases")).one()

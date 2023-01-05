@@ -212,6 +212,7 @@ class ColumnDependencies:
 @dataclass
 class SelectDependencies:
     """stores all the dependencies found in a select statement"""
+
     tables: List[Tuple[TableExpression, Node]] = field(default_factory=list)
     columns: ColumnDependencies = field(default_factory=ColumnDependencies)
     subqueries: List[Tuple[Select, "SelectDependencies"]] = field(default_factory=list)
@@ -219,11 +220,11 @@ class SelectDependencies:
     @property
     def all_tables(self) -> Generator[Tuple[TableExpression, Node], None, None]:
         "get all table node, dj node pairs"
-        for t in self.tables:
-            yield t
-        for _, s in self.subqueries:
-            for t in s.all_tables:
-                yield t
+        for table in self.tables:
+            yield table
+        for _, subquery in self.subqueries:
+            for table in subquery.all_tables:
+                yield table
 
     @property
     def all_node_dependencies(self) -> Set[Node]:
@@ -236,6 +237,7 @@ class SelectDependencies:
 @dataclass
 class QueryDependencies:
     """stores all dependencies found in a query statement"""
+
     ctes: List[SelectDependencies] = field(default_factory=list)
     select: SelectDependencies = field(default_factory=SelectDependencies)
 
@@ -248,6 +250,7 @@ class QueryDependencies:
         return ret
 
 
+# pylint: disable=R0914
 # flake8: noqa: C901
 def extract_dependencies_from_select(
     session: Session,
@@ -265,10 +268,10 @@ def extract_dependencies_from_select(
     tables = select.from_.tables + [join.table for join in select.from_.joins]
 
     # namespaces track the namespace: list of columns that can be had from it
-    namespaces: Dict[str, Set[str]] = dict()
+    namespaces: Dict[str, Set[str]] = {}
 
     # namespace: ast node defining namespace
-    table_nodes: Dict[str, TableExpression] = dict()
+    table_nodes: Dict[str, TableExpression] = {}
 
     # track subqueries encountered to extract from them after
     subqueries: List[Select] = []
@@ -366,7 +369,7 @@ def extract_dependencies_from_select(
                 )
 
             return None
-        elif col.name.name not in cols:
+        if col.name.name not in cols:
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
             if not namespace:
                 exc_msg = (
@@ -378,7 +381,7 @@ def extract_dependencies_from_select(
                 raise MissingColumnException(exc_msg, col, col.parent)
 
             return None
-        elif namespace:
+        if namespace:
             add.append((col, table_nodes[namespace]))
         else:
             for k, v in namespaces.items():
