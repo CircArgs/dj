@@ -123,9 +123,9 @@ class UnknownNodeException(BuildException):
         self.context = context
 
     def __str__(self) -> str:
-        ret = self.message
+        ret = f"{self.message} `{self.node}`"
         if self.context:
-            ret += f" from:\n\n `{self.context}`"
+            ret += f" from `{self.context}`"
         return ret
 
 
@@ -138,9 +138,9 @@ class NodeTypeException(BuildException):
         self.context = context
 
     def __str__(self) -> str:
-        ret = self.message
+        ret = f"{self.message} `{self.node}`"
         if self.context:
-            ret += f" from:\n\n `{self.context}`"
+            ret += f" from `{self.context}`"
         return ret
 
 
