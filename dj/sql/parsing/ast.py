@@ -269,9 +269,19 @@ class Node(ABC):
             )
         )
 
-    @abstractmethod
     def __hash__(self) -> int:
         """hash a node"""
+        return hash(
+            tuple(
+                self.fields(
+                    flat=True,
+                    nodes_only=False,
+                    obfuscated=True,
+                    nones=True,
+                    named=False,
+                )
+            )
+        )
 
     @abstractmethod
     def __str__(self) -> str:
@@ -301,9 +311,6 @@ class Name(Node):
     def to_named_type(self, named_type: Type["Named"]) -> "Named":
         """transform the name into a specific Named that only requires a name to create"""
         return named_type(self)
-
-    def __hash__(self) -> int:
-        return hash(self.name + self.quote_style)
 
     def __str__(self) -> str:
         return (
@@ -345,9 +352,6 @@ class Namespace(Node):
 
     def __str__(self) -> str:
         return ".".join(str(name) for name in self.names)
-
-    def __hash__(self) -> int:
-        return hash(Namespace)
 
 
 @dataclass(eq=False)  # type: ignore
@@ -392,9 +396,6 @@ class UnaryOp(Operation):
     op: UnaryOpKind  # pylint: disable=C0103
     expr: Expression
 
-    def __hash__(self) -> int:
-        return hash((UnaryOp, self.op))
-
     def __str__(self) -> str:
         return f"{self.op.value} {(self.expr)}"
 
@@ -433,9 +434,6 @@ class BinaryOp(Operation):
     left: Expression
     right: Expression
 
-    def __hash__(self) -> int:
-        return hash((BinaryOp, self.op))
-
     def __str__(self) -> str:
         return f"{(self.left)} {self.op.value} {(self.right)}"
 
@@ -447,9 +445,6 @@ class Between(Operation):
     expr: Expression
     low: Expression
     high: Expression
-
-    def __hash__(self) -> int:
-        return hash((Between, self.low, self.high))
 
     def __str__(self) -> str:
         return f"{(self.expr)} BETWEEN {(self.low)} AND {(self.high)}"
@@ -463,9 +458,6 @@ class Case(Expression):
     else_result: Optional[Expression] = None
     operand: Optional[Expression] = None
     results: List[Expression] = field(default_factory=list)
-
-    def __hash__(self) -> int:
-        return id(self)
 
     def __str__(self) -> str:
         branches = "\n\tWHEN ".join(
@@ -484,9 +476,6 @@ class Function(Named, Operation):
 
     args: List[Expression] = field(default_factory=list)
 
-    def __hash__(self) -> int:
-        return hash(Function)
-
     def __str__(self) -> str:
         return f"{self.name}({', '.join(str(arg) for arg in self.args)})"
 
@@ -496,9 +485,6 @@ class IsNull(Operation):
     """class representing IS NULL"""
 
     expr: Expression
-
-    def __hash__(self) -> int:
-        return hash(IsNull)
 
     def __str__(self) -> str:
         return f"{(self.expr)} IS NULL"
@@ -530,26 +516,17 @@ class Number(Value):
             except ValueError:
                 self.value = float(self.value)
 
-    def __hash__(self) -> int:
-        return hash((Number, self.value))
-
 
 class String(Value):
     """string value"""
 
     value: str
 
-    def __hash__(self) -> int:
-        return hash((String, self.value))
-
 
 class Boolean(Value):
     """boolean True/False value"""
 
     value: bool
-
-    def __hash__(self) -> int:
-        return hash((Boolean, self.value))
 
 
 NodeType = TypeVar("NodeType", bound=Node)  # pylint: disable=C0103
@@ -560,9 +537,6 @@ class Alias(Named, Generic[NodeType]):
     """wraps node types with an alias"""
 
     child: Node = field(default_factory=Node)
-
-    def __hash__(self) -> int:
-        return hash((Alias, self.name))
 
     def __str__(self) -> str:
         return f"{self.child} AS {self.name}"
@@ -584,9 +558,6 @@ class Column(Named):
         if self._table is None:
             self._table = table
         return self
-
-    def __hash__(self) -> int:
-        return hash((Column, self.name))
 
     def __str__(self) -> str:
         prefix = "" if self.namespace is None else str(self.namespace)
@@ -617,9 +588,6 @@ class Wildcard(Expression):
             self._table = table
         return self
 
-    def __hash__(self) -> int:  # pragma: no cover
-        return id(Wildcard)
-
     def __str__(self) -> str:
         return "*"
 
@@ -641,9 +609,6 @@ class Table(Named):
             self._columns.append(column)
             column.add_table(self)
         return self
-
-    def __hash__(self) -> int:
-        return hash((Table, self.name))
 
     def __str__(self) -> str:
         namespace_str = ""
@@ -675,9 +640,6 @@ class Join(Node):
     table: TableExpression
     on: Expression  # pylint: disable=C0103
 
-    def __hash__(self) -> int:
-        return hash((Join, self.kind))
-
     def __str__(self) -> str:
         return f"""{self.kind.value} {self.table}
         ON {self.on}"""
@@ -689,9 +651,6 @@ class From(Node):
 
     tables: List[TableExpression]
     joins: List[Join] = field(default_factory=list)
-
-    def __hash__(self) -> int:
-        return id(self)
 
     def __str__(self) -> str:
         return (
@@ -712,9 +671,6 @@ class Select(Expression):
     where: Optional[Expression] = None
     limit: Optional[Number] = None
     distinct: bool = False
-
-    def __hash__(self) -> int:
-        return id(self)
 
     def __str__(self) -> str:
         subselect = not isinstance(self.parent, Query)
@@ -743,9 +699,6 @@ class Query(Expression):
 
     select: "Select"
     ctes: List[Alias["Select"]] = field(default_factory=list)
-
-    def __hash__(self):
-        return id(self)
 
     def __str__(self) -> str:
         subquery = bool(self.parent)

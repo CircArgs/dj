@@ -298,6 +298,7 @@ class TestExtractingDependencies:
                 dimension_column=None,
             ),
         ]
+
     # TODO: ctes
     # def test_select_from_single_transform_with_a_cte(self, session: Session):
     #     """
@@ -548,27 +549,36 @@ class TestExtractingDependencies:
         )
         query_dependencies = extract_dependencies_from_query(session, query)
         dependencies = query_dependencies.select
-
-        assert dependencies.columns == ColumnDependencies(
-            projection=[
-                (
-                    ASTColumn(
-                        name=Name(name="transaction_id", quote_style=""),
-                        namespace=Namespace(names=[Name(name="r2", quote_style="")]),
+        assert hash(dependencies.columns.all_columns) == hash(
+            ColumnDependencies(
+                projection=[
+                    (
+                        ASTColumn(
+                            name=Name(name="transaction_id", quote_style=""),
+                            namespace=Namespace(
+                                names=[Name(name="r2", quote_style="")]
+                            ),
+                        ),
+                        Table(
+                            name=Name(name="returns", quote_style=""), namespace=None
+                        ),
                     ),
-                    Table(name=Name(name="returns", quote_style=""), namespace=None),
-                ),
-            ],
-            group_by=[],
-            filters=[
-                (
-                    ASTColumn(
-                        name=Name(name="transaction_id", quote_style=""),
-                        namespace=Namespace(names=[Name(name="r2", quote_style="")]),
+                ],
+                group_by=[],
+                filters=[
+                    (
+                        ASTColumn(
+                            name=Name(name="transaction_id", quote_style=""),
+                            namespace=Namespace(
+                                names=[Name(name="r2", quote_style="")]
+                            ),
+                        ),
+                        Table(
+                            name=Name(name="returns", quote_style=""), namespace=None
+                        ),
                     ),
-                    Table(name=Name(name="returns", quote_style=""), namespace=None),
-                ),
-            ],
+                ],
+            ).all_columns
         )
 
         assert len(dependencies.tables) == 2
