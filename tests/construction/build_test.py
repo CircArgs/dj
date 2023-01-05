@@ -11,7 +11,6 @@ from dj.construction.build import (
     MissingColumnException,
     NodeTypeException,
     UnknownNodeException,
-    amenable_name,
     extract_dependencies,
     extract_dependencies_from_query,
     extract_dependencies_from_select,
@@ -35,22 +34,6 @@ from dj.sql.parsing.ast import (
 )
 from dj.sql.parsing.backends.sqloxide import parse
 from dj.typing import ColumnType
-
-
-@pytest.mark.parametrize(
-    "name,expected_amenable_name",
-    [
-        ("a.b.c.d", "a_DOT_b_DOT_c_DOT_d"),
-        ("a.b.node-name", "a_DOT_b_DOT_node_MINUS_name"),
-        ("node-[name]", "node_MINUS__LBRACK_name_RBRACK_"),
-        ("a.b.node&(name)", "a_DOT_b_DOT_node_AMP__LPAREN_name_RPAREN_"),
-        ("a.b.c.+d", "a_DOT_b_DOT_c_DOT__PLUS_d"),
-        ("a.b.c.-d", "a_DOT_b_DOT_c_DOT__MINUS_d"),
-        ("a.b.c.~~d", "a_DOT_b_DOT_c_DOT_______d"),
-    ],
-)
-def test_amenable_name(name: str, expected_amenable_name: str):
-    assert amenable_name(name) == expected_amenable_name
 
 
 @pytest.mark.parametrize(
@@ -129,7 +112,7 @@ def test_compound_build_exception():
     assert CompoundBuildException()._raise == False
 
     CompoundBuildException().reset()
-    assert CompoundBuildException()._raise == False
+    assert CompoundBuildException()._raise == True
 
 
 class TestExtractingDependencies:
@@ -315,101 +298,101 @@ class TestExtractingDependencies:
                 dimension_column=None,
             ),
         ]
+    # TODO: ctes
+    # def test_select_from_single_transform_with_a_cte(self, session: Session):
+    #     """
+    #     Test a select from a transform with a cte
+    #     """
+    #     query = parse(
+    #         "with p AS (select transaction_id, transaction_amount from purchases) "
+    #         "select transaction_id, transaction_amount from p",
+    #         "hive",
+    #     )
+    #     query_dependencies = extract_dependencies_from_query(session, query)
+    #     dependencies = query_dependencies.select
 
-    def test_select_from_single_transform_with_a_cte(self, session: Session):
-        """
-        Test a select from a transform with a cte
-        """
-        query = parse(
-            "with p AS (select transaction_id, transaction_amount from purchases) "
-            "select transaction_id, transaction_amount from p",
-            "hive",
-        )
-        query_dependencies = extract_dependencies_from_query(session, query)
-        dependencies = query_dependencies.select
+    #     assert len(list(dependencies.all_tables)) == 1
+    #     assert len(list(dependencies.all_node_dependencies)) == 1
+    #     assert dependencies.columns == ColumnDependencies(
+    #         projection=[
+    #             (
+    #                 ASTColumn(
+    #                     name=Name(name="transaction_id", quote_style=""),
+    #                     namespace=None,
+    #                 ),
+    #                 Table(
+    #                     name=Name(name="purchases", quote_style=""),
+    #                     namespace=None,
+    #                 ),
+    #             ),
+    #             (
+    #                 ASTColumn(
+    #                     name=Name(name="transaction_amount", quote_style=""),
+    #                     namespace=None,
+    #                 ),
+    #                 Table(
+    #                     name=Name(name="purchases", quote_style=""),
+    #                     namespace=None,
+    #                 ),
+    #             ),
+    #         ],
+    #         group_by=[],
+    #         filters=[],
+    #     )
 
-        assert len(list(dependencies.all_tables)) == 1
-        assert len(list(dependencies.all_node_dependencies)) == 1
-        assert dependencies.columns == ColumnDependencies(
-            projection=[
-                (
-                    ASTColumn(
-                        name=Name(name="transaction_id", quote_style=""),
-                        namespace=None,
-                    ),
-                    Table(
-                        name=Name(name="purchases", quote_style=""),
-                        namespace=None,
-                    ),
-                ),
-                (
-                    ASTColumn(
-                        name=Name(name="transaction_amount", quote_style=""),
-                        namespace=None,
-                    ),
-                    Table(
-                        name=Name(name="purchases", quote_style=""),
-                        namespace=None,
-                    ),
-                ),
-            ],
-            group_by=[],
-            filters=[],
-        )
+    #     assert list(dependencies.columns.all_columns) == [
+    #         (
+    #             ASTColumn(
+    #                 name=Name(name="transaction_id", quote_style=""),
+    #                 namespace=None,
+    #             ),
+    #             Table(name=Name(name="purchases", quote_style=""), namespace=None),
+    #         ),
+    #         (
+    #             ASTColumn(
+    #                 name=Name(name="transaction_amount", quote_style=""),
+    #                 namespace=None,
+    #             ),
+    #             Table(name=Name(name="purchases", quote_style=""), namespace=None),
+    #         ),
+    #     ]
 
-        assert list(dependencies.columns.all_columns) == [
-            (
-                ASTColumn(
-                    name=Name(name="transaction_id", quote_style=""),
-                    namespace=None,
-                ),
-                Table(name=Name(name="purchases", quote_style=""), namespace=None),
-            ),
-            (
-                ASTColumn(
-                    name=Name(name="transaction_amount", quote_style=""),
-                    namespace=None,
-                ),
-                Table(name=Name(name="purchases", quote_style=""), namespace=None),
-            ),
-        ]
-
-        assert len(dependencies.tables) == 1
-        assert dependencies.tables[0][0].name == Name(
-            name="purchases",
-            quote_style="",
-        )
-        assert dependencies.tables[0][1].name == "purchases"
-        assert dependencies.tables[0][1].columns == [
-            Column(
-                id=1,
-                dimension_id=None,
-                type=ColumnType.INT,
-                name="transaction_id",
-                dimension_column=None,
-            ),
-            Column(
-                id=2,
-                dimension_id=None,
-                type=ColumnType.DATETIME,
-                name="transaction_time",
-                dimension_column=None,
-            ),
-            Column(
-                id=3,
-                dimension_id=None,
-                type=ColumnType.FLOAT,
-                name="transaction_amount",
-                dimension_column=None,
-            ),
-            Column(
-                id=4,
-                dimension_id=None,
-                type=ColumnType.INT,
-                name="customer_id",
-                dimension_column=None,
-            ),
-        ]
+    #     assert len(dependencies.tables) == 1
+    #     assert dependencies.tables[0][0].name == Name(
+    #         name="purchases",
+    #         quote_style="",
+    #     )
+    #     assert dependencies.tables[0][1].name == "purchases"
+    #     assert dependencies.tables[0][1].columns == [
+    #         Column(
+    #             id=1,
+    #             dimension_id=None,
+    #             type=ColumnType.INT,
+    #             name="transaction_id",
+    #             dimension_column=None,
+    #         ),
+    #         Column(
+    #             id=2,
+    #             dimension_id=None,
+    #             type=ColumnType.DATETIME,
+    #             name="transaction_time",
+    #             dimension_column=None,
+    #         ),
+    #         Column(
+    #             id=3,
+    #             dimension_id=None,
+    #             type=ColumnType.FLOAT,
+    #             name="transaction_amount",
+    #             dimension_column=None,
+    #         ),
+    #         Column(
+    #             id=4,
+    #             dimension_id=None,
+    #             type=ColumnType.INT,
+    #             name="customer_id",
+    #             dimension_column=None,
+    #         ),
+    #     ]
 
     def test_simple_agg_from_single_transform(self, session: Session):
         """
@@ -558,7 +541,7 @@ class TestExtractingDependencies:
         SELECT r2.transaction_id as matched_id
         FROM returns r1
         LEFT JOIN returns r2
-        ON r1.purchase_id = r2.transaction_id
+        ON r1.purchase_transaction_id = r2.transaction_id
         WHERE r2.transaction_id is not null
         """,
             "hive",

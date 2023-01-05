@@ -11,19 +11,9 @@ from sqlalchemy.orm.exc import NoResultFound
 from sqlmodel import Session, select
 
 from dj.models.node import Node, NodeType
-from dj.sql.parsing.ast import (
-    Alias,
-    BinaryOp,
-    BinaryOpKind,
-    Column,
-    Join,
-    JoinKind,
-    Name,
-    Named,
-    Namespace,
-)
+from dj.sql.parsing.ast import Alias, Column, Named
 from dj.sql.parsing.ast import Node as ASTNode
-from dj.sql.parsing.ast import Query, Select, Table, TableExpression, flatten
+from dj.sql.parsing.ast import Query, Select, Table, TableExpression
 from dj.sql.parsing.backends.sqloxide import parse
 
 
@@ -250,11 +240,11 @@ class QueryDependencies:
         return ret
 
 
-# pylint: disable=R0914
+# pylint: disable=R0914, R0912, R0915
 # flake8: noqa: C901
 def extract_dependencies_from_select(
     session: Session,
-    select: Select,
+    select: Select,  # pylint: disable= W0621
 ) -> SelectDependencies:
     """get all dj node dependencies from a sql select while validating"""
     # first, we get the tables in the from of the select including subqueries
@@ -311,20 +301,16 @@ def extract_dependencies_from_select(
         # subquery handling
         # we track subqueries separately and extract at the end
         # but introspect the columns to make sure the parent query selection is valid
-        if isinstance(table, Query):
-            if table.ctes:
-                with CompoundBuildException().catch:
-                    raise InvalidSQLException("ctes are not allowed here", table)
+        if isinstance(table, Select):
+            subqueries.append(table)
 
-            subqueries.append(table.select)
-
-            for col in table.select.projection:
+            for col in table.projection:
                 if not isinstance(col, Named):
                     with CompoundBuildException().catch:
                         raise InvalidSQLException(
                             f"{col} is an unnamed expression. Try adding an alias.",
                             col,
-                            table.select,
+                            select,
                         )
 
                 namespaces[namespace].add(col.name.name)
@@ -378,16 +364,22 @@ def extract_dependencies_from_select(
                 if col.name.name in multiple_refs:
                     exc_msg = f"`{col.name.name}` appears in multiple references and so must be namespaced."  # pylint: disable=C0301
             with CompoundBuildException().catch:
-                raise MissingColumnException(exc_msg, col, col.parent)
+                raise InvalidSQLException(exc_msg, col, col.parent)
 
             return None
         if namespace:
             add.append((col, table_nodes[namespace]))
         else:
-            for k, v in namespaces.items():
-                if col.name.name in v:
-                    add.append((col, table_nodes[k]))
+            added = False
+            for nmpsc, nmspc_cols in namespaces.items():
+                if col.name.name in nmspc_cols:
+                    added = True
+                    add.append((col, table_nodes[nmpsc]))
                     break
+            if not added:
+                with CompoundBuildException().catch:
+                    raise InvalidSQLException(f"No reference found for {col.name.name}.", col, col.parent)
+
         return namespace
 
     # check projection
@@ -431,22 +423,33 @@ def extract_dependencies_from_select(
 
     for add, col, dim_allowed in gbfo:
         bad_namespace = False
+        bad_col_exc = None
         try:
             namespace = check_col(col, add)  # type: ignore
             bad_namespace = namespace is None
-        except BuildException:
+        except BuildException as exc:
+            bad_col_exc = exc
             bad_namespace = True
         if bad_namespace:
             namespace = make_name(col.namespace)
             if not dim_allowed:
+                dim = None
+                try:
+                    dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
+                except BuildException:
+                    pass
                 with CompoundBuildException().catch:
-                    raise InvalidSQLException(
-                        "Cannot reference a dimension here.",
-                        col,
-                        col.parent,
-                    )
+                    if dim is not None:
+                        raise InvalidSQLException(
+                            "Cannot reference a dimension here.",
+                            col,
+                            col.parent,
+                        )
+                    elif bad_col_exc is not None:
+                        raise bad_col_exc
 
             else:
+
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if (dim is not None) and (
                     col.name.name not in {c.name for c in dim.columns}
@@ -466,9 +469,9 @@ def extract_dependencies_from_select(
     # - there is no need to join it so we check only dimensions not used that way
     for dim in dimension_columns - dimensions_tables:
         joinable = False
-        for st in sources_transforms:
-            for col in st.columns:
-                if st.dimension == dim:
+        for src_fm in sources_transforms:
+            for col in src_fm.columns:
+                if src_fm.dimension == dim:
                     joinable = True
                     break
             if joinable:
@@ -531,12 +534,9 @@ def extract_dependencies(
             if dep_node.type != NodeType.SOURCE:
                 extract = extract_dependencies(session, dep_node, dialect)
                 new = (new[0] | extract[0], new[1] | extract[1])
-        curr_len = len(dep_nodes)
+        curr_len = len(dep_nodes[0]) + len(dep_nodes[1])
         dep_nodes = (new[0] | dep_nodes[0], new[1] | dep_nodes[1])
-        if curr_len != len(dep_nodes):
-            added = True
-        else:
-            added = False
+        added = curr_len != (len(dep_nodes[0]) + len(dep_nodes[1]))
         travelled += 1
 
     if CompoundBuildException().errors and raise_:

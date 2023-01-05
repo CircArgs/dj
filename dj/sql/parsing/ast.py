@@ -109,6 +109,7 @@ class Node(ABC):
         """flatten the sub-ast of the node as an iterator"""
         return self.filter(lambda _: True)
 
+    # pylint: disable=R0913
     def fields(
         self,
         flat: bool = True,
@@ -183,8 +184,8 @@ class Node(ABC):
             named=False,
         )
 
-    def replace(self: TNode, from_: "Node", to: "Node") -> TNode:
-        """Replace a node `from_` with a node `to` in the subtree"""
+    def replace(self: TNode, to_replace: "Node", replacement: "Node") -> TNode:
+        """Replace a node `to_replace` with a node `replacement` in the subtree"""
         for name, child in self.fields(
             flat=False,
             nodes_only=False,
@@ -194,22 +195,22 @@ class Node(ABC):
         ):
             if isinstance(child, (list, tuple)):
                 new = []
-                for c in child:
-                    if id(c) != id(from_):
-                        new.append(c)
+                for nested in child:
+                    if id(nested) != id(to_replace):
+                        new.append(nested)
                     else:
-                        new.append(to)
-                    if isinstance(c, Node):
-                        c.replace(from_, to)
+                        new.append(replacement)
+                    if isinstance(nested, Node):
+                        nested.replace(to_replace, replacement)
                 if isinstance(child, tuple):
                     new = tuple(new)  # type: ignore
 
-                self.__setattr__(name, new)
+                setattr(self, name, new)
             else:
-                if id(child) == id(from_):
-                    self.__setattr__(name, to)
+                if id(child) == id(to_replace):
+                    setattr(self, name, replacement)
             if isinstance(child, Node):
-                child.replace(from_, to)
+                child.replace(to_replace, replacement)
 
         return self
 
@@ -277,10 +278,7 @@ class Node(ABC):
         """get the string of a node"""
 
 
-TExpression = TypeVar(
-    "TExpression",
-    bound="Expression",
-)  # pylint: disable=C0103
+TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C0103
 
 
 class Expression(Node):
@@ -719,6 +717,7 @@ class Select(Expression):
         return id(self)
 
     def __str__(self) -> str:
+        subselect = not isinstance(self.parent, Query)
         parts = ["SELECT "]
         if self.distinct:
             parts.append("DISTINCT ")
@@ -732,7 +731,10 @@ class Select(Expression):
             parts.extend(("HAVING ", str(self.having), "\n"))
         if self.limit is not None:
             parts.extend(("LIMIT ", str(self.limit), "\n"))
-        return " ".join(parts)
+        select = " ".join(parts)
+        if subselect:
+            return "(" + select + ")"
+        return select
 
 
 @dataclass(eq=False)
@@ -747,7 +749,7 @@ class Query(Expression):
 
     def __str__(self) -> str:
         subquery = bool(self.parent)
-        ctes = ",\n".join(f"{cte.name} AS ({(cte.child)})" for cte in self.ctes)
+        ctes = ",\n".join(f"{cte.name} AS {(cte.child)}" for cte in self.ctes)
         with_ = "WITH" if ctes else ""
         select = f"({(self.select)})" if subquery else (self.select)
         return f"""

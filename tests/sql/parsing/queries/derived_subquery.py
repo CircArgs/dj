@@ -34,51 +34,47 @@ def derived_subquery():
                     Alias(
                         name=Name(name="t1", quote_style=""),
                         namespace=None,
-                        child=Query(
-                            select=Select(
-                                from_=From(
-                                    tables=[
-                                        Table(
-                                            name=Name(name="t", quote_style=""),
-                                            namespace=None,
-                                        ),
-                                    ],
-                                    joins=[],
-                                ),
-                                group_by=[],
-                                having=None,
-                                projection=[Wildcard()],
-                                where=None,
-                                limit=None,
-                                distinct=False,
+                        child=Select(
+                            from_=From(
+                                tables=[
+                                    Table(
+                                        name=Name(name="t", quote_style=""),
+                                        namespace=None,
+                                    )
+                                ],
+                                joins=[],
                             ),
-                            ctes=[],
+                            group_by=[],
+                            having=None,
+                            projection=[Wildcard()],
+                            where=None,
+                            limit=None,
+                            distinct=False,
                         ),
-                    ),
+                    )
                 ],
                 joins=[
                     Join(
                         kind=JoinKind.Inner,
                         table=Table(
-                            name=Name(name="t2", quote_style=""),
-                            namespace=None,
+                            name=Name(name="t2", quote_style=""), namespace=None
                         ),
                         on=BinaryOp(
+                            op=BinaryOpKind.Eq,
                             left=Column(
                                 name=Name(name="c", quote_style=""),
                                 namespace=Namespace(
-                                    names=[Name(name="t1", quote_style="")],
+                                    names=[Name(name="t1", quote_style="")]
                                 ),
                             ),
-                            op=BinaryOpKind.Eq,
                             right=Column(
                                 name=Name(name="c", quote_style=""),
                                 namespace=Namespace(
-                                    names=[Name(name="t2", quote_style="")],
+                                    names=[Name(name="t2", quote_style="")]
                                 ),
                             ),
                         ),
-                    ),
+                    )
                 ],
             ),
             group_by=[],
