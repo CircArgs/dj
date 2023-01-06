@@ -209,15 +209,15 @@ def test_get_nearest_parent():
     test getting the nearest parent of a node of a certain type
     """
 
-    name_a = Name('a')
-    name_b = Name('b')
+    name_a = Name("a")
+    name_b = Name("b")
 
     assert name_a.get_nearest_parent_of_type(Table) is None
     table = Table(name_a, Namespace([name_b]))
     assert name_a.get_nearest_parent_of_type(Table) is table
     assert name_b.get_nearest_parent_of_type(Table) is table
 
-    
+
 def test_empty_namespace_conversion_raises():
     """
     test if an empty namespace conversion raises

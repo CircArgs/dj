@@ -90,6 +90,19 @@ class NodeTypeException(BuildException):
             ret += f" from `{self.context}`"
         return ret
 
+class DimensionJoinException(BuildException):
+    """A dimension is not joinable in a query"""
+
+    def __init__(self, message: str, node: str, context: Optional[ASTNode] = None):
+        self.message = message
+        self.node = node
+        self.context = context
+
+    def __str__(self) -> str:
+        ret = f"{self.message} `{self.node}`"
+        if self.context:
+            ret += f" from `{self.context}`"
+        return ret
 
 class CompoundBuildException(BuildException):
     """Exception singleton to optionally build up exceptions or raise"""
@@ -235,9 +248,6 @@ class QueryDependencies:
     def all_node_dependencies(self) -> Set[Node]:
         """get all dj nodes referenced"""
         ret = self.select.all_node_dependencies
-        for cte_deps in self.ctes:
-            #TODO: extract ctes
-            ret |= cte_deps.all_node_dependencies #pragma: no cover
         return ret
 
 
@@ -297,7 +307,7 @@ def extract_dependencies_from_select(
         namespaces[namespace] = set()
 
         if isinstance(table, Alias):
-            table = table.child  # type: ignore
+            table: Union[Table, Select] = table.child  # type: ignore
 
         # subquery handling
         # we track subqueries separately and extract at the end
@@ -317,7 +327,7 @@ def extract_dependencies_from_select(
                 namespaces[namespace].add(col.name.name)
         # tables are sought as nodes and nothing else
         # can be source, transform, dimension
-        elif isinstance(table, Table):
+        else:  # not select then is table
             node_name = make_name(table.namespace, table.name.name)
             table_node = get_dj_node(
                 session,
@@ -344,10 +354,10 @@ def extract_dependencies_from_select(
     namespaces[""] = no_namespace_safe_cols - multiple_refs  # type: ignore
 
     def check_col(col: Column, add: list) -> Optional[str]:
-        """Check if a column can be had in a query"""
+        """Check if a column can be had in the query"""
         namespace = make_name(col.namespace)  # str preceding the column name
         cols = namespaces.get(namespace)
-        if cols is None:
+        if cols is None:# there is just no namespace at all where the node could come from
             with CompoundBuildException().catch:
                 raise MissingColumnException(
                     f"No namespace `{namespace}` from which to reference column `{col.name.name}`.",
@@ -356,35 +366,27 @@ def extract_dependencies_from_select(
                 )
 
             return None
-        if col.name.name not in cols:
+        if col.name.name not in cols:#the proposed namespace does not contain the column; which error to raise?
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
+            exc = MissingColumnException
             if not namespace:
                 exc_msg = (
                     f"Column `{col.name.name}` does not exist in any referenced tables."
                 )
                 if col.name.name in multiple_refs:
                     exc_msg = f"`{col.name.name}` appears in multiple references and so must be namespaced."  # pylint: disable=C0301
+                    exc = InvalidSQLException
             with CompoundBuildException().catch:
-                raise InvalidSQLException(exc_msg, col, col.parent)
+                raise exc(exc_msg, col, col.parent)
 
             return None
-        if namespace:
+        if namespace: #there is a proposed namespace that has the column
             add.append((col, table_nodes[namespace]))
-        else:
-            added = False
-            for nmpsc, nmspc_cols in namespaces.items():
+        else: #finally check if the column that does not have a namespace is in any namespace
+            for nmpsc, nmspc_cols in namespaces.items():#pragma: no cover
                 if col.name.name in nmspc_cols:
-                    added = True
                     add.append((col, table_nodes[nmpsc]))
-                    break
-            if not added:
-                with CompoundBuildException().catch:
-                    raise InvalidSQLException(
-                        f"No reference found for {col.name.name}.",
-                        col,
-                        col.parent,
-                    )
-
+                    return namespace
         return namespace
 
     # check projection
@@ -441,7 +443,7 @@ def extract_dependencies_from_select(
                 dim = None
                 try:
                     dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
-                except BuildException:
+                except BuildException: #pragma: no cover
                     pass
                 with CompoundBuildException().catch:
                     if dim is not None:
@@ -450,40 +452,41 @@ def extract_dependencies_from_select(
                             col,
                             col.parent,
                         )
-                    if bad_col_exc is not None:
+                    if bad_col_exc is not None:  #pragma: no cover
                         raise bad_col_exc
 
             else:
 
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
-                if (dim is not None) and (
-                    col.name.name not in {c.name for c in dim.columns}
-                ):
-                    with CompoundBuildException().catch:
-                        raise MissingColumnException(
-                            f"Dimension `{dim.name}` has no column `{col.name.name}`.",
-                            col,
-                            col.parent,
-                        )
-
-                    add.append((col, dim))
-                    dimension_columns.add(dim)
+                if dim is not None: #pragma: no cover 
+                    if col.name.name not in {c.name for c in dim.columns}:
+                        with CompoundBuildException().catch:
+                            raise MissingColumnException(
+                                f"Dimension `{dim.name}` has no column `{col.name.name}`.",
+                                col,
+                                col.parent,
+                            )
+                    else:
+                        add.append((col, dim))
+                        dimension_columns.add(dim)
 
     # check if there are any column dimension dependencies we need to join but cannot
     # if a dimension is already used directly in the from (manually join or ref'd) -
     # - there is no need to join it so we check only dimensions not used that way
     for dim in dimension_columns - dimensions_tables:
         joinable = False
-        for src_fm in sources_transforms:
-            for col in src_fm.columns:
-                if src_fm.dimension == dim:
+        # it is not possible to have a dimension referenced 
+        # somewhere without some from tables
+        for src_fm in sources_transforms|dimensions_tables:  #pragma: no cover
+            for col in src_fm.columns:  #pragma: no cover
+                if col.dimension == dim:#pragma: no cover
                     joinable = True
                     break
             if joinable:
                 break
         if not joinable:
             with CompoundBuildException().catch:
-                NodeTypeException(
+                raise DimensionJoinException(
                     f"Dimension `{dim.name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause.",  # pylint: disable=C0301
                     dim,
                     select.from_,

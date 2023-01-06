@@ -11,7 +11,7 @@ from dj.construction.build import (
     InvalidSQLException,
     MissingColumnException,
     NodeTypeException,
-    UnknownNodeException,
+    UnknownNodeException,DimensionJoinException,
     extract_dependencies,
     extract_dependencies_from_query,
     get_dj_node,
@@ -213,12 +213,40 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 Column(name="event_type", type=ColumnType.STR),
             ],
         )
+        event_type_id = Node(
+            name="event_type_id",
+            type=NodeType.DIMENSION,
+            query="SELECT DISTINCT event_id, event_type FROM customer_events",
+            columns=[
+                Column(name="event_id", type=ColumnType.INT),
+                Column(name="event_type", type=ColumnType.STR),
+            ],
+        )
+        customer_events2 = Node(
+            name="customer_events2",
+            type=NodeType.SOURCE,
+            columns=[
+                Column(
+                    name="event_id",
+                    type=ColumnType.INT,
+                    dimension=event_type_id,
+                    dimension_column="event_id",
+                ),
+                Column(name="event_time", type=ColumnType.DATETIME),
+                Column(name="event_type", type=ColumnType.STR),
+                Column(name="customer_id", type=ColumnType.INT),
+                Column(name="message", type=ColumnType.STR),
+            ],
+        )
+
         session.add(purchases)
         session.add(customer_events)
         session.add(returns)
         session.add(eligible_purchases)
         session.add(returned_transactions)
         session.add(event_type)
+        session.add(customer_events2)
+        session.add(event_type_id)
         session.commit()
         return session
 
@@ -243,6 +271,118 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         )
 
         assert len(dependencies.tables) == 0
+
+    def test_select_with_filter_dimension(self, session: Session):
+        """
+        Test a select with a dimension filter
+        """
+        query = parse(
+            "select event_type from customer_events2 where event_type_id.event_type='an_event'",
+            "hive",
+        )
+        query_dependencies = extract_dependencies_from_query(session, query)
+        dependencies = query_dependencies.select
+        assert len(list(dependencies.all_tables)) == 1
+        assert len(list(dependencies.all_node_dependencies)) == 2
+        assert len(dependencies.columns.filters) == 1
+        assert dependencies.columns.filters[0][0].compare(
+            ASTColumn(
+                name=Name(name="event_type", quote_style=""),
+                namespace=Namespace(names=[Name(name="event_type_id", quote_style="")]),
+            )
+        )
+    def test_select_with_having_dimension(self, session: Session):
+        """
+        Test a select with a dimension having
+        """
+        query = parse(
+            "select event_type from customer_events2 group by event_type_id.event_type having event_type_id.event_type='an_event'",
+            "hive",
+        )
+        query_dependencies = extract_dependencies_from_query(session, query)
+        dependencies = query_dependencies.select
+        assert len(list(dependencies.all_tables)) == 1
+        assert len(list(dependencies.all_node_dependencies)) == 2
+        assert len(dependencies.columns.filters) == 1
+        assert dependencies.columns.filters[0][0].compare(
+            ASTColumn(
+                name=Name(name="event_type", quote_style=""),
+                namespace=Namespace(names=[Name(name="event_type_id", quote_style="")]),
+            )
+        )
+
+    def test_select_with_having_without_groupby_raises(self, session: Session):
+        """
+        Test a select with a dimension having
+        """
+        query = parse(
+            "select event_type from customer_events2 having event_type_id.event_type='an_event'",
+            "hive",
+        )
+        with pytest.raises(InvalidSQLException):
+            extract_dependencies_from_query(session, query)
+
+
+    def test_select_with_dimension_in_improper_place(self, session: Session):
+        """
+        Test a select with a dimension in an invalid place
+        """
+        query = parse("""
+            select a.event_type from customer_events2 a
+            left join customer_events2 b
+            on a.event_type=b.event_type and event_type_id.event_type='an_event'
+            """,
+            "hive",
+        )
+        with pytest.raises(InvalidSQLException):
+            extract_dependencies_from_query(session, query)
+
+    def test_select_with_dimension_unjoinable(self, session: Session):
+        """
+        Test a select with a dimension that cannot be joined
+        """
+        query = parse("""
+            select event_type from customer_events
+            where event_type_id.event_type='an_event'
+            """,
+            "hive",
+        )
+        with pytest.raises(DimensionJoinException) as exc:
+            extract_dependencies_from_query(session, query)
+
+        assert 'not joinable' in str(exc)
+
+    def test_no_such_namespaced_column_in_existing_node(self, session: Session):
+        """
+        Test a with a nonexistent column
+        """
+        query = parse(
+            "select a.event_type2 from customer_events2 a",
+            "hive",
+        )
+        with pytest.raises(MissingColumnException):
+            extract_dependencies_from_query(session, query)
+    def test_no_such_column_in_existing_node(self, session: Session):
+        """
+        Test a with a nonexistent column
+        """
+        query = parse(
+            "select event_type2 from customer_events2 ",
+            "hive",
+        )
+        with pytest.raises(MissingColumnException):
+            extract_dependencies_from_query(session, query)
+
+    def test_dupe_column_refs(self, session: Session):
+        """
+        Test a column that can come from multiple places
+        """
+        query = parse(
+            "select event_type from customer_events2, event_type_id",
+            "hive",
+        )
+        with pytest.raises(InvalidSQLException):
+            extract_dependencies_from_query(session, query)
 
     def test_simple_select_from_single_transform(self, session: Session):
         """
@@ -1470,3 +1610,4 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         CompoundBuildException().reset()
         CompoundBuildException().set_raise(False)
         extract_dependencies_from_query(session, query)
+        CompoundBuildException().reset()

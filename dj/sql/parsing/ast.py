@@ -16,7 +16,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    Iterable
+    Iterable,
 )
 from collections import namedtuple
 from dj.sql.parsing.backends.exceptions import DJParseException
@@ -141,10 +141,13 @@ class Node(ABC):
             Iterator: returns all children of a node given filters
                 and optional flattening (by default Iterator[Node])
         """
+
         def make_child_generator():
             """makes a generator enclosing self to return not obfuscated fields (fields without starting `_`)"""  # pylint: disable=C0301
             for self_field in fields(self):
-                if (not self_field.name.startswith("_") if not obfuscated else True) and (self_field.name in self.__dict__):
+                if (
+                    not self_field.name.startswith("_") if not obfuscated else True
+                ) and (self_field.name in self.__dict__):
                     value = self.__dict__[self_field.name]
                     values = [value]
                     if flat:
@@ -157,7 +160,6 @@ class Node(ABC):
 
         # `iter`s used to satisfy mypy (`child_generator` type changes between generator, filter)
         child_generator = iter(make_child_generator())
-
 
         if nodes_only:
             child_generator = iter(
@@ -214,7 +216,7 @@ class Node(ABC):
     def compare(self, other: "Node") -> bool:
         """a compare two ASTs"""
 
-        return not self.diff(other)
+        return id(self) == id(other) or hash(self) == hash(other)
 
     def diff(self, other: "Node") -> List[Tuple["Node", "Node"]]:
         """compare two ASTs for differences and return the pairs of differences"""
