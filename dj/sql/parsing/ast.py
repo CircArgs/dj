@@ -279,8 +279,8 @@ class Node(ABC):
                     obfuscated=True,
                     nones=True,
                     named=False,
-                )
-            )
+                ),
+            ),
         )
 
     @abstractmethod

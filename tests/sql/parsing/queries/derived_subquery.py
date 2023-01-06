@@ -40,7 +40,7 @@ def derived_subquery():
                                     Table(
                                         name=Name(name="t", quote_style=""),
                                         namespace=None,
-                                    )
+                                    ),
                                 ],
                                 joins=[],
                             ),
@@ -51,30 +51,31 @@ def derived_subquery():
                             limit=None,
                             distinct=False,
                         ),
-                    )
+                    ),
                 ],
                 joins=[
                     Join(
                         kind=JoinKind.Inner,
                         table=Table(
-                            name=Name(name="t2", quote_style=""), namespace=None
+                            name=Name(name="t2", quote_style=""),
+                            namespace=None,
                         ),
                         on=BinaryOp(
                             op=BinaryOpKind.Eq,
                             left=Column(
                                 name=Name(name="c", quote_style=""),
                                 namespace=Namespace(
-                                    names=[Name(name="t1", quote_style="")]
+                                    names=[Name(name="t1", quote_style="")],
                                 ),
                             ),
                             right=Column(
                                 name=Name(name="c", quote_style=""),
                                 namespace=Namespace(
-                                    names=[Name(name="t2", quote_style="")]
+                                    names=[Name(name="t2", quote_style="")],
                                 ),
                             ),
                         ),
-                    )
+                    ),
                 ],
             ),
             group_by=[],

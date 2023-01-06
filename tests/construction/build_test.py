@@ -1,6 +1,7 @@
 """
 Tests for building nodes and extracting dependencies
 """
+# pylint: disable=too-many-lines
 import pytest
 from sqlmodel import Session, select
 
@@ -13,7 +14,6 @@ from dj.construction.build import (
     UnknownNodeException,
     extract_dependencies,
     extract_dependencies_from_query,
-    extract_dependencies_from_select,
     get_dj_node,
     make_name,
 )
@@ -27,7 +27,6 @@ from dj.sql.parsing.ast import (
     JoinKind,
     Name,
     Namespace,
-    Query,
     Select,
     String,
     Table,
@@ -55,10 +54,16 @@ from dj.typing import ColumnType
     ],
 )
 def test_make_name(namespace: str, name: str, expected_make_name: str):
+    """
+    Test making names from a namespace and a name
+    """
     assert make_name(namespace, name) == expected_make_name
 
 
 def test_invalid_sql_exception():
+    """
+    Test raising an InvalidSQLException
+    """
     assert "This is an exception message `foo`" in str(
         InvalidSQLException("This is an exception message", Name("foo")),
     )
@@ -68,6 +73,9 @@ def test_invalid_sql_exception():
 
 
 def test_missing_column_exception():
+    """
+    Test raising a MissingColumnException
+    """
     assert "This is an exception message `foo`" in str(
         MissingColumnException("This is an exception message", ASTColumn("foo")),
     )
@@ -81,6 +89,9 @@ def test_missing_column_exception():
 
 
 def test_node_type_exception():
+    """
+    Test raising a NodeTypeException
+    """
     assert "This is an exception message `foo`" in str(
         NodeTypeException("This is an exception message", Name("foo")),
     )
@@ -90,6 +101,9 @@ def test_node_type_exception():
 
 
 def test_unknown_node_exception():
+    """
+    Test raising an UnknownNodeException
+    """
     assert "This is an exception message `foo`" in str(
         UnknownNodeException("This is an exception message", Name("foo")),
     )
@@ -99,9 +113,12 @@ def test_unknown_node_exception():
 
 
 def test_compound_build_exception():
+    """
+    Test raising a CompoundBuildException
+    """
     CompoundBuildException().reset()
-    CompoundBuildException().set_raise(False)
-    with CompoundBuildException().catch:
+    CompoundBuildException().set_raise(False)  # pylint: disable=protected-access
+    with CompoundBuildException().catch:  # pylint: disable=protected-access
         raise InvalidSQLException("This SQL is invalid.", node=Name("foo"))
 
     assert len(CompoundBuildException().errors) == 1
@@ -109,13 +126,13 @@ def test_compound_build_exception():
 
     CompoundBuildException().clear()
     assert CompoundBuildException().errors == []
-    assert CompoundBuildException()._raise == False
+    assert CompoundBuildException()._raise is False  # pylint: disable=protected-access
 
     CompoundBuildException().reset()
-    assert CompoundBuildException()._raise == True
+    assert CompoundBuildException()._raise is True  # pylint: disable=protected-access
 
 
-class TestExtractingDependencies:
+class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
     """A class for testing extracting dependencies from DJ queries"""
 
     @pytest.fixture
@@ -205,6 +222,28 @@ class TestExtractingDependencies:
         session.commit()
         return session
 
+    def test_simplest_select(self, session: Session):
+        """
+        Test a simplest select
+        """
+        query = parse(
+            "select 1",
+            "hive",
+        )
+        query_dependencies = extract_dependencies_from_query(session, query)
+        dependencies = query_dependencies.select
+
+        assert len(list(dependencies.all_tables)) == 0
+        assert len(list(dependencies.all_node_dependencies)) == 0
+        assert dependencies.columns == ColumnDependencies(
+            projection=[],
+            group_by=[],
+            filters=[],
+            ons=[],
+        )
+
+        assert len(dependencies.tables) == 0
+
     def test_simple_select_from_single_transform(self, session: Session):
         """
         Test a simple select from a transform
@@ -263,7 +302,7 @@ class TestExtractingDependencies:
         ]
 
         assert len(dependencies.tables) == 1
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="purchases",
             quote_style="",
         )
@@ -421,7 +460,7 @@ class TestExtractingDependencies:
         )
 
         assert len(dependencies.tables) == 1
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="eligible_purchases",
             quote_style="",
         )
@@ -497,7 +536,7 @@ class TestExtractingDependencies:
         )
 
         assert len(dependencies.tables) == 1
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="eligible_purchases",
             quote_style="",
         )
@@ -588,7 +627,7 @@ class TestExtractingDependencies:
         )
 
         assert len(dependencies.tables) == 2
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="returns",
             quote_style="",
         )
@@ -617,7 +656,7 @@ class TestExtractingDependencies:
             ),
         ]
 
-        assert dependencies.tables[1][0].name == Name(
+        assert dependencies.tables[1][0].name == Name(  # type: ignore
             name="returns",
             quote_style="",
         )
@@ -686,7 +725,7 @@ class TestExtractingDependencies:
         )
 
         assert len(dependencies.tables) == 1
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="purchases",
             quote_style="",
         )
@@ -736,9 +775,64 @@ class TestExtractingDependencies:
             "hive",
         )
 
-        # TODO: Currently fails because dimension nodes are not included in dependency extraction
         query_dependencies = extract_dependencies_from_query(session, query)
         dependencies = query_dependencies.select
+
+        assert dependencies.columns == ColumnDependencies(
+            projection=[
+                (
+                    ASTColumn(
+                        name=Name(name="event_id", quote_style=""),
+                        namespace=None,
+                    ),
+                    Table(
+                        name=Name(name="customer_events", quote_style=""),
+                        namespace=None,
+                    ),
+                ),
+                (
+                    ASTColumn(
+                        name=Name(name="event_time", quote_style=""),
+                        namespace=None,
+                    ),
+                    Table(
+                        name=Name(name="customer_events", quote_style=""),
+                        namespace=None,
+                    ),
+                ),
+                (
+                    ASTColumn(
+                        name=Name(name="message", quote_style=""),
+                        namespace=None,
+                    ),
+                    Table(
+                        name=Name(name="customer_events", quote_style=""),
+                        namespace=None,
+                    ),
+                ),
+            ],
+            group_by=[],
+            filters=[],
+            ons=[
+                (
+                    ASTColumn(
+                        name=Name(name="event_type", quote_style=""),
+                        namespace=Namespace(names=[Name(name="ce", quote_style="")]),
+                    ),
+                    Table(
+                        name=Name(name="customer_events", quote_style=""),
+                        namespace=None,
+                    ),
+                ),
+                (
+                    ASTColumn(
+                        name=Name(name="event_type", quote_style=""),
+                        namespace=Namespace(names=[Name(name="et", quote_style="")]),
+                    ),
+                    Table(name=Name(name="event_type", quote_style=""), namespace=None),
+                ),
+            ],
+        )
 
     def test_ambiguous_column_name(self, session: Session):
         """
@@ -813,7 +907,7 @@ class TestExtractingDependencies:
         )
 
         assert len(dependencies.tables) == 2
-        assert dependencies.tables[0][0].name == Name(
+        assert dependencies.tables[0][0].name == Name(  # type: ignore
             name="returns",
             quote_style="",
         )
@@ -842,7 +936,7 @@ class TestExtractingDependencies:
             ),
         ]
 
-        assert dependencies.tables[1][0].name == Name(
+        assert dependencies.tables[1][0].name == Name(  # type: ignore
             name="purchases",
             quote_style="",
         )
@@ -878,6 +972,82 @@ class TestExtractingDependencies:
             ),
         ]
 
+    def test_raise_on_joining_with_unamed_subquery(self, session: Session):
+        """
+        Test raising an error when attempting an implicit join to an unnamed subquery
+        """
+        query = parse(
+            """
+            SELECT
+            min(event_time) as first_event_time,
+            max(event_time) as last_event_time
+            FROM event_type, (
+              SELECT event_time
+              FROM (
+                SELECT event_id, event_time, message
+                FROM customer_events ce
+                LEFT JOIN purchases et
+                ON ce.event_id = et.transaction_id
+                WHERE ce.event_type = 'TRANSACTION'
+              )
+            )
+            """,
+            "hive",
+        )
+
+        with pytest.raises(InvalidSQLException) as exc_info:
+            extract_dependencies_from_query(session, query)
+
+        assert "You may only use an unnamed subquery alone" in str(exc_info.value)
+
+    def test_raise_on_duplicate_aliases(self, session: Session):
+        """
+        Test raising when an alias is used more than once
+        """
+        query = parse(
+            """SELECT event_id, event_time, message
+            FROM customer_events ce
+            LEFT JOIN purchases ce
+            ON ce.event_id = ce.transaction_id
+            """,
+            "hive",
+        )
+
+        with pytest.raises(InvalidSQLException) as exc_info:
+            extract_dependencies_from_query(session, query)
+
+        assert "Duplicate name `ce` for table. `purchases AS ce`" in str(exc_info.value)
+
+    def test_raise_on_unaliased_expression(self, session: Session):
+        """
+        Test raising when an expression is used without an alias
+        """
+        query = parse(
+            """
+            SELECT
+            min(event_time) as first_event_time,
+            max(event_time) as last_event_time
+            FROM (
+              SELECT event_time
+              FROM (
+                SELECT event_id, event_time, message, (1*2)
+                FROM customer_events ce
+                LEFT JOIN purchases et
+                ON ce.event_id = et.transaction_id
+                WHERE ce.event_type = 'TRANSACTION'
+              )
+            )
+            """,
+            "hive",
+        )
+
+        with pytest.raises(InvalidSQLException) as exc_info:
+            extract_dependencies_from_query(session, query)
+
+        assert "1 * 2 is an unnamed expression. Try adding an alias." in str(
+            exc_info.value,
+        )
+
     def test_deeply_nested_subqueries(self, session: Session):
         """
         Test extracting dependencies with deeply nested subqueries
@@ -909,7 +1079,8 @@ class TestExtractingDependencies:
             projection=[
                 (
                     ASTColumn(
-                        name=Name(name="event_time", quote_style=""), namespace=None,
+                        name=Name(name="event_time", quote_style=""),
+                        namespace=None,
                     ),
                     Select(
                         from_=From(
@@ -917,7 +1088,7 @@ class TestExtractingDependencies:
                                 Select(
                                     from_=From(
                                         tables=[
-                                            Alias(
+                                            Alias(  # type: ignore
                                                 name=Name(name="ce", quote_style=""),
                                                 namespace=None,
                                                 child=Table(
@@ -932,9 +1103,10 @@ class TestExtractingDependencies:
                                         joins=[
                                             Join(
                                                 kind=JoinKind.LeftOuter,
-                                                table=Alias(
+                                                table=Alias(  # type: ignore
                                                     name=Name(
-                                                        name="et", quote_style="",
+                                                        name="et",
+                                                        quote_style="",
                                                     ),
                                                     namespace=None,
                                                     child=Table(
@@ -988,7 +1160,8 @@ class TestExtractingDependencies:
                                         ),
                                         ASTColumn(
                                             name=Name(
-                                                name="event_time", quote_style="",
+                                                name="event_time",
+                                                quote_style="",
                                             ),
                                             namespace=None,
                                         ),
@@ -1001,7 +1174,8 @@ class TestExtractingDependencies:
                                         op=BinaryOpKind.Eq,
                                         left=ASTColumn(
                                             name=Name(
-                                                name="event_type", quote_style="",
+                                                name="event_type",
+                                                quote_style="",
                                             ),
                                             namespace=Namespace(
                                                 names=[Name(name="ce", quote_style="")],
@@ -1030,7 +1204,8 @@ class TestExtractingDependencies:
                 ),
                 (
                     ASTColumn(
-                        name=Name(name="event_time", quote_style=""), namespace=None,
+                        name=Name(name="event_time", quote_style=""),
+                        namespace=None,
                     ),
                     Select(
                         from_=From(
@@ -1038,7 +1213,7 @@ class TestExtractingDependencies:
                                 Select(
                                     from_=From(
                                         tables=[
-                                            Alias(
+                                            Alias(  # type: ignore
                                                 name=Name(name="ce", quote_style=""),
                                                 namespace=None,
                                                 child=Table(
@@ -1053,9 +1228,10 @@ class TestExtractingDependencies:
                                         joins=[
                                             Join(
                                                 kind=JoinKind.LeftOuter,
-                                                table=Alias(
+                                                table=Alias(  # type: ignore
                                                     name=Name(
-                                                        name="et", quote_style="",
+                                                        name="et",
+                                                        quote_style="",
                                                     ),
                                                     namespace=None,
                                                     child=Table(
@@ -1109,7 +1285,8 @@ class TestExtractingDependencies:
                                         ),
                                         ASTColumn(
                                             name=Name(
-                                                name="event_time", quote_style="",
+                                                name="event_time",
+                                                quote_style="",
                                             ),
                                             namespace=None,
                                         ),
@@ -1122,7 +1299,8 @@ class TestExtractingDependencies:
                                         op=BinaryOpKind.Eq,
                                         left=ASTColumn(
                                             name=Name(
-                                                name="event_type", quote_style="",
+                                                name="event_type",
+                                                quote_style="",
                                             ),
                                             namespace=Namespace(
                                                 names=[Name(name="ce", quote_style="")],
@@ -1185,12 +1363,12 @@ class TestExtractingDependencies:
 
         assert "Found 2 issues:" in str(exc_info.value)
         assert (
-            "InvalidSQLException: `transaction_id` appears in multiple references and so must be namespaced."
-            in str(exc_info.value)
+            "InvalidSQLException: `transaction_id` appears in multiple "
+            "references and so must be namespaced." in str(exc_info.value)
         )
         assert (
-            "InvalidSQLException: `transaction_time` appears in multiple references and so must be namespaced."
-            in str(exc_info.value)
+            "InvalidSQLException: `transaction_time` appears in multiple "
+            "references and so must be namespaced." in str(exc_info.value)
         )
 
     def test_extract_dependencies_from_node_with_unraised_exceptions(
@@ -1208,13 +1386,10 @@ class TestExtractingDependencies:
             node=returned_transactions,
             raise_=False,
         )
-
-        purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
-
         assert len(node_dependencies) == 2
 
-        n = node_dependencies[0].pop()
-        assert n.name == "purchases"
+        dep = node_dependencies[0].pop()
+        assert dep.name == "purchases"
         assert node_dependencies[1] == set()
 
     def test_extract_dependencies_from_node_with_no_query(self, session: Session):
@@ -1233,21 +1408,65 @@ class TestExtractingDependencies:
 
         assert "Node has no query" in str(exc_info.value)
 
+    def test_extract_dependencies_with_unknown_dep_raise_false(self, session: Session):
+        """
+        Test extracting dependencies with an unknown dependency with raising disabled
+        """
 
-def test_get_dj_node_raise_unknown_node_exception(session: Session):
-    """
-    Test raising an unknown node exception when calling get_dj_node
-    """
-    CompoundBuildException().reset()
-    with pytest.raises(UnknownNodeException) as exc_info:
-        get_dj_node(session, "foobar")
+        extract_dependencies(
+            session=session,
+            node=Node(
+                name="foo",
+                type=NodeType.TRANSFORM,
+                query="select a from foobar",
+            ),
+            raise_=False,
+        )
 
-    assert "No  node `foobar` exists." in str(exc_info.value)
+        assert "UnknownNodeException" in str(CompoundBuildException())
 
-    with pytest.raises(UnknownNodeException) as exc_info:
-        get_dj_node(session, "foobar", kinds={NodeType.METRIC, NodeType.DIMENSION})
+    def test_get_dj_node_raise_unknown_node_exception(self, session: Session):
+        """
+        Test raising an unknown node exception when calling get_dj_node
+        """
+        CompoundBuildException().reset()
+        with pytest.raises(UnknownNodeException) as exc_info:
+            get_dj_node(session, "foobar")
 
-    assert "NodeType.DIMENSION" in str(exc_info.value)
-    assert "NodeType.METRIC" in str(exc_info.value)
-    assert "NodeType.SOURCE" not in str(exc_info.value)
-    assert "NodeType.TRANSFORM" not in str(exc_info.value)
+        assert "No  node `foobar` exists." in str(exc_info.value)
+
+        with pytest.raises(UnknownNodeException) as exc_info:
+            get_dj_node(session, "foobar", kinds={NodeType.METRIC, NodeType.DIMENSION})
+
+        assert "NodeType.DIMENSION" in str(exc_info.value)
+        assert "NodeType.METRIC" in str(exc_info.value)
+        assert "NodeType.SOURCE" not in str(exc_info.value)
+        assert "NodeType.TRANSFORM" not in str(exc_info.value)
+
+        with pytest.raises(NodeTypeException) as exc_info:
+            # test that the event_type raises because it's a dimension and not a transform
+            get_dj_node(session, "event_type", kinds={NodeType.TRANSFORM})
+
+        assert (
+            "Node `event_type` is of type `NODETYPE.DIMENSION`. "
+            "Expected kind to be of NodeType.TRANSFORM. `event_type`"
+        ) in str(exc_info.value)
+
+    def test_raise_on_unknown_namespace_for_a_column(self, session: Session):
+        """
+        Test raising when the query is using a column
+        """
+        query = parse(
+            "select baz.a from purchases",
+            "hive",
+        )
+        with pytest.raises(MissingColumnException) as exc_info:
+            extract_dependencies_from_query(session, query)
+
+        assert "No namespace `baz` from which to reference column `a`." in str(
+            exc_info.value,
+        )
+
+        CompoundBuildException().reset()
+        CompoundBuildException().set_raise(False)
+        extract_dependencies_from_query(session, query)

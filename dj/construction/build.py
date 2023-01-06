@@ -379,7 +379,9 @@ def extract_dependencies_from_select(
             if not added:
                 with CompoundBuildException().catch:
                     raise InvalidSQLException(
-                        f"No reference found for {col.name.name}.", col, col.parent
+                        f"No reference found for {col.name.name}.",
+                        col,
+                        col.parent,
                     )
 
         return namespace
@@ -447,7 +449,7 @@ def extract_dependencies_from_select(
                             col,
                             col.parent,
                         )
-                    elif bad_col_exc is not None:
+                    if bad_col_exc is not None:
                         raise bad_col_exc
 
             else:
