@@ -78,14 +78,10 @@ def test_dimension_join_exception():
     Test raising an DimensionJoinException
     """
     assert "This is an exception message `foo`" in str(
-        DimensionJoinException(
-            "This is an exception message", "foo")
-        ),
+        DimensionJoinException("This is an exception message", "foo")
     )
     assert "This is an exception message `foo`" in str(
-        DimensionJoinException(
-            "This is an exception message", "foo", Table(Name("bar"))
-        ),
+        DimensionJoinException("This is an exception message", "foo", Name("bar"))
     )
 
 
@@ -165,6 +161,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 Column(name="transaction_time", type=ColumnType.DATETIME),
                 Column(name="transaction_amount", type=ColumnType.FLOAT),
                 Column(name="customer_id", type=ColumnType.INT),
+                Column(name="system_version", type=ColumnType.STR),
             ],
         )
         customer_events = Node(
@@ -191,7 +188,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         eligible_purchases = Node(
             name="eligible_purchases",
             query="""
-                    SELECT transaction_id, transaction_time, transaction_amount, customer_id
+                    SELECT transaction_id, transaction_time, transaction_amount, customer_id, system_version
                     FROM purchases
                     WHERE transaction_amount > 100.0
                 """,
@@ -201,6 +198,25 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 Column(name="transaction_time", type=ColumnType.DATETIME),
                 Column(name="transaction_amount", type=ColumnType.FLOAT),
                 Column(name="customer_id", type=ColumnType.INT),
+                Column(name="system_version", type=ColumnType.STR),
+            ],
+        )
+
+        eligible_purchases_new_system = Node(
+            name="eligible_purchases_new_system",
+            query="""
+                    SELECT transaction_id, transaction_time, transaction_amount, customer_id
+                    FROM eligible_purchases
+                    WHERE transaction_amount > 100.0
+                    AND system_version = 'v2'
+                """,
+            type=NodeType.TRANSFORM,
+            columns=[
+                Column(name="transaction_id", type=ColumnType.INT),
+                Column(name="transaction_time", type=ColumnType.DATETIME),
+                Column(name="transaction_amount", type=ColumnType.FLOAT),
+                Column(name="customer_id", type=ColumnType.INT),
+                Column(name="system_version", type=ColumnType.STR),
             ],
         )
 
@@ -260,6 +276,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         session.add(customer_events)
         session.add(returns)
         session.add(eligible_purchases)
+        session.add(eligible_purchases_new_system)
         session.add(returned_transactions)
         session.add(event_type)
         session.add(customer_events2)
@@ -494,7 +511,15 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 name="customer_id",
                 dimension_column=None,
             ),
+            Column(
+                id=5,
+                dimension_id=None,
+                type=ColumnType.STR,
+                name="system_version",
+                dimension_column=None,
+            ),
         ]
+
 
     # TODO: ctes
     # def test_select_from_single_transform_with_a_cte(self, session: Session):
@@ -625,31 +650,38 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert dependencies.tables[0][1].name == "eligible_purchases"
         assert dependencies.tables[0][1].columns == [
             Column(
-                id=13,
+                id=14,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="transaction_id",
                 dimension_column=None,
             ),
             Column(
-                id=14,
+                id=15,
                 dimension_id=None,
                 type=ColumnType.DATETIME,
                 name="transaction_time",
                 dimension_column=None,
             ),
             Column(
-                id=15,
+                id=16,
                 dimension_id=None,
                 type=ColumnType.FLOAT,
                 name="transaction_amount",
                 dimension_column=None,
             ),
             Column(
-                id=16,
+                id=17,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="customer_id",
+                dimension_column=None,
+            ),
+            Column(
+                id=18,
+                dimension_id=None,
+                type=ColumnType.STR,
+                name="system_version",
                 dimension_column=None,
             ),
         ]
@@ -701,31 +733,38 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert dependencies.tables[0][1].name == "eligible_purchases"
         assert dependencies.tables[0][1].columns == [
             Column(
-                id=13,
+                id=14,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="transaction_id",
                 dimension_column=None,
             ),
             Column(
-                id=14,
+                id=15,
                 dimension_id=None,
                 type=ColumnType.DATETIME,
                 name="transaction_time",
                 dimension_column=None,
             ),
             Column(
-                id=15,
+                id=16,
                 dimension_id=None,
                 type=ColumnType.FLOAT,
                 name="transaction_amount",
                 dimension_column=None,
             ),
             Column(
-                id=16,
+                id=17,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="customer_id",
+                dimension_column=None,
+            ),
+            Column(
+                id=18,
+                dimension_id=None,
+                type=ColumnType.STR,
+                name="system_version",
                 dimension_column=None,
             ),
         ]
@@ -792,21 +831,21 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert dependencies.tables[0][1].name == "returns"
         assert dependencies.tables[0][1].columns == [
             Column(
-                id=10,
+                id=11,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="transaction_id",
                 dimension_column=None,
             ),
             Column(
-                id=11,
+                id=12,
                 dimension_id=None,
                 type=ColumnType.DATETIME,
                 name="transaction_time",
                 dimension_column=None,
             ),
             Column(
-                id=12,
+                id=13,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="purchase_transaction_id",
@@ -821,21 +860,21 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert dependencies.tables[1][1].name == "returns"
         assert dependencies.tables[1][1].columns == [
             Column(
-                id=10,
+                id=11,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="transaction_id",
                 dimension_column=None,
             ),
             Column(
-                id=11,
+                id=12,
                 dimension_id=None,
                 type=ColumnType.DATETIME,
                 name="transaction_time",
                 dimension_column=None,
             ),
             Column(
-                id=12,
+                id=13,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="purchase_transaction_id",
@@ -915,6 +954,13 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="customer_id",
+                dimension_column=None,
+            ),
+            Column(
+                id=5,
+                dimension_id=None,
+                type=ColumnType.STR,
+                name="system_version",
                 dimension_column=None,
             ),
         ]
@@ -1072,21 +1118,21 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert dependencies.tables[0][1].name == "returns"
         assert dependencies.tables[0][1].columns == [
             Column(
-                id=10,
+                id=11,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="transaction_id",
                 dimension_column=None,
             ),
             Column(
-                id=11,
+                id=12,
                 dimension_id=None,
                 type=ColumnType.DATETIME,
                 name="transaction_time",
                 dimension_column=None,
             ),
             Column(
-                id=12,
+                id=13,
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="purchase_transaction_id",
@@ -1126,6 +1172,13 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 dimension_id=None,
                 type=ColumnType.INT,
                 name="customer_id",
+                dimension_column=None,
+            ),
+            Column(
+                id=5,
+                dimension_id=None,
+                type=ColumnType.STR,
+                name="system_version",
                 dimension_column=None,
             ),
         ]
@@ -1498,16 +1551,38 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         eligible_purchases = session.exec(
             select(Node).where(Node.name == "eligible_purchases"),
         ).one()
-        node_dependencies = extract_dependencies(
+        node_dependencies, dangling_references = extract_dependencies(
             session=session,
             node=eligible_purchases,
         )
 
+        assert len(node_dependencies) == 1
+        assert len(dangling_references) == 0
+
         purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
+        assert purchases in node_dependencies
+
+
+    def test_extract_dependencies_from_node_with_greater_distance(self, session: Session):
+        """
+        Test extracting dependencies further than immediately surrounding nodes
+        """
+        eligible_purchases_new_system = session.exec(
+            select(Node).where(Node.name == "eligible_purchases_new_system"),
+        ).one()
+        node_dependencies, dangling_references = extract_dependencies(
+            session=session,
+            node=eligible_purchases_new_system,
+        )
 
         assert len(node_dependencies) == 2
-        assert node_dependencies[0] == {purchases}
-        assert node_dependencies[1] == set()
+        assert len(dangling_references) == 0
+
+        eligible_purchases = session.exec(select(Node).where(Node.name == "eligible_purchases")).one()
+        purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
+        assert eligible_purchases in node_dependencies
+        assert purchases in node_dependencies
+
 
     def test_extract_dependencies_from_node_with_exceptions(self, session: Session):
         """
@@ -1539,16 +1614,20 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         returned_transactions = session.exec(
             select(Node).where(Node.name == "returned_transactions"),
         ).one()
-        node_dependencies = extract_dependencies(
+        node_dependencies, dangling_references = extract_dependencies(
             session=session,
             node=returned_transactions,
             raise_=False,
         )
-        assert len(node_dependencies) == 2
 
-        dep = node_dependencies[0].pop()
-        assert dep.name == "purchases"
-        assert node_dependencies[1] == set()
+        assert len(node_dependencies) == 2
+        assert len(dangling_references) == 0
+
+        purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
+        returns = session.exec(select(Node).where(Node.name == "returns")).one()
+        assert purchases in node_dependencies
+        assert returns in node_dependencies
+
 
     def test_extract_dependencies_from_node_with_no_query(self, session: Session):
         """
