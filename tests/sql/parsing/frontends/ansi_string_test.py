@@ -4,6 +4,7 @@ tests for DJ ast representation as sql string
 import pytest
 
 from dj.sql.parsing.ast import (
+    Alias,
     Column,
     From,
     Name,
@@ -11,7 +12,6 @@ from dj.sql.parsing.ast import (
     Query,
     Select,
     Table,
-    Alias,
 )
 from dj.sql.parsing.frontends.string import sql
 from tests.sql.utils import TPCDS_QUERY_SET, compare_query_strings, read_query

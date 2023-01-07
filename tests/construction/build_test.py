@@ -8,11 +8,11 @@ from sqlmodel import Session, select
 from dj.construction.build import (
     ColumnDependencies,
     CompoundBuildException,
+    DimensionJoinException,
     InvalidSQLException,
     MissingColumnException,
     NodeTypeException,
     UnknownNodeException,
-    DimensionJoinException,
     extract_dependencies,
     extract_dependencies_from_query,
     get_dj_node,
@@ -78,10 +78,10 @@ def test_dimension_join_exception():
     Test raising an DimensionJoinException
     """
     assert "This is an exception message `foo`" in str(
-        DimensionJoinException("This is an exception message", "foo")
+        DimensionJoinException("This is an exception message", "foo"),
     )
     assert "This is an exception message `foo`" in str(
-        DimensionJoinException("This is an exception message", "foo", Name("bar"))
+        DimensionJoinException("This is an exception message", "foo", Name("bar")),
     )
 
 
@@ -323,7 +323,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
             ASTColumn(
                 name=Name(name="event_type", quote_style=""),
                 namespace=Namespace(names=[Name(name="event_type_id", quote_style="")]),
-            )
+            ),
         )
 
     def test_select_with_having_dimension(self, session: Session):
@@ -331,7 +331,8 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         Test a select with a dimension having
         """
         query = parse(
-            "select event_type from customer_events2 group by event_type_id.event_type having event_type_id.event_type='an_event'",
+            "select event_type from customer_events2 "
+            "group by event_type_id.event_type having event_type_id.event_type='an_event'",
             "hive",
         )
         query_dependencies = extract_dependencies_from_query(session, query)
@@ -343,7 +344,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
             ASTColumn(
                 name=Name(name="event_type", quote_style=""),
                 namespace=Namespace(names=[Name(name="event_type_id", quote_style="")]),
-            )
+            ),
         )
 
     def test_select_with_having_without_groupby_raises(self, session: Session):
@@ -383,7 +384,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
             """,
             "hive",
         )
-        with pytest.raises(DimensionJoinException) as exc:
+        with pytest.raises(DimensionJoinException):
             extract_dependencies_from_query(session, query)
 
     def test_no_such_namespaced_column_in_existing_node(self, session: Session):
@@ -519,7 +520,6 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 dimension_column=None,
             ),
         ]
-
 
     def test_simple_agg_from_single_transform(self, session: Session):
         """
@@ -1466,8 +1466,10 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
         assert purchases in node_dependencies
 
-
-    def test_extract_dependencies_from_node_with_greater_distance(self, session: Session):
+    def test_extract_dependencies_from_node_with_greater_distance(
+        self,
+        session: Session,
+    ):
         """
         Test extracting dependencies further than immediately surrounding nodes
         """
@@ -1482,11 +1484,12 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         assert len(node_dependencies) == 2
         assert len(dangling_references) == 0
 
-        eligible_purchases = session.exec(select(Node).where(Node.name == "eligible_purchases")).one()
+        eligible_purchases = session.exec(
+            select(Node).where(Node.name == "eligible_purchases"),
+        ).one()
         purchases = session.exec(select(Node).where(Node.name == "purchases")).one()
         assert eligible_purchases in node_dependencies
         assert purchases in node_dependencies
-
 
     def test_extract_dependencies_from_node_with_exceptions(self, session: Session):
         """
@@ -1531,7 +1534,6 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         returns = session.exec(select(Node).where(Node.name == "returns")).one()
         assert purchases in node_dependencies
         assert returns in node_dependencies
-
 
     def test_extract_dependencies_from_node_with_no_query(self, session: Session):
         """

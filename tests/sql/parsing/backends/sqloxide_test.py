@@ -17,12 +17,12 @@ from dj.sql.parsing.backends.sqloxide import parse, parse_op, parse_value
 from tests.sql.utils import TPCDS_QUERY_SET, read_query
 
 
-def test_cte_suquery_sql_parse_error(case_when_null):
+def test_cte_suquery_sql_parse_error():
     """
     test parsing a subquery with ctes fail
     """
     query = """
-    select * from 
+    select * from
     (WITH
   eid AS
   (

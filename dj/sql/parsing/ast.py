@@ -16,9 +16,8 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    Iterable,
 )
-from collections import namedtuple
+
 from dj.sql.parsing.backends.exceptions import DJParseException
 
 PRIMITIVES = {int, float, str, bool, type(None)}
