@@ -90,6 +90,7 @@ class NodeTypeException(BuildException):
             ret += f" from `{self.context}`"
         return ret
 
+
 class DimensionJoinException(BuildException):
     """A dimension is not joinable in a query"""
 
@@ -103,6 +104,7 @@ class DimensionJoinException(BuildException):
         if self.context:
             ret += f" from `{self.context}`"
         return ret
+
 
 class CompoundBuildException(BuildException):
     """Exception singleton to optionally build up exceptions or raise"""
@@ -357,7 +359,9 @@ def extract_dependencies_from_select(
         """Check if a column can be had in the query"""
         namespace = make_name(col.namespace)  # str preceding the column name
         cols = namespaces.get(namespace)
-        if cols is None:# there is just no namespace at all where the node could come from
+        if (
+            cols is None
+        ):  # there is just no namespace at all where the node could come from
             with CompoundBuildException().catch:
                 raise MissingColumnException(
                     f"No namespace `{namespace}` from which to reference column `{col.name.name}`.",
@@ -366,7 +370,9 @@ def extract_dependencies_from_select(
                 )
 
             return None
-        if col.name.name not in cols:#the proposed namespace does not contain the column; which error to raise?
+        if (
+            col.name.name not in cols
+        ):  # the proposed namespace does not contain the column; which error to raise?
             exc_msg = f"Namespace `{namespace}` has no column `{col.name.name}`."
             exc = MissingColumnException
             if not namespace:
@@ -380,10 +386,10 @@ def extract_dependencies_from_select(
                 raise exc(exc_msg, col, col.parent)
 
             return None
-        if namespace: #there is a proposed namespace that has the column
+        if namespace:  # there is a proposed namespace that has the column
             add.append((col, table_nodes[namespace]))
-        else: #finally check if the column that does not have a namespace is in any namespace
-            for nmpsc, nmspc_cols in namespaces.items():#pragma: no cover
+        else:  # finally check if the column that does not have a namespace is in any namespace
+            for nmpsc, nmspc_cols in namespaces.items():  # pragma: no cover
                 if col.name.name in nmspc_cols:
                     add.append((col, table_nodes[nmpsc]))
                     return namespace
@@ -443,7 +449,7 @@ def extract_dependencies_from_select(
                 dim = None
                 try:
                     dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
-                except BuildException: #pragma: no cover
+                except BuildException:  # pragma: no cover
                     pass
                 with CompoundBuildException().catch:
                     if dim is not None:
@@ -452,13 +458,13 @@ def extract_dependencies_from_select(
                             col,
                             col.parent,
                         )
-                    if bad_col_exc is not None:  #pragma: no cover
+                    if bad_col_exc is not None:  # pragma: no cover
                         raise bad_col_exc
 
             else:
 
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
-                if dim is not None: #pragma: no cover 
+                if dim is not None:  # pragma: no cover
                     if col.name.name not in {c.name for c in dim.columns}:
                         with CompoundBuildException().catch:
                             raise MissingColumnException(
@@ -475,11 +481,11 @@ def extract_dependencies_from_select(
     # - there is no need to join it so we check only dimensions not used that way
     for dim in dimension_columns - dimensions_tables:
         joinable = False
-        # it is not possible to have a dimension referenced 
+        # it is not possible to have a dimension referenced
         # somewhere without some from tables
-        for src_fm in sources_transforms|dimensions_tables:  #pragma: no cover
-            for col in src_fm.columns:  #pragma: no cover
-                if col.dimension == dim:#pragma: no cover
+        for src_fm in sources_transforms | dimensions_tables:  # pragma: no cover
+            for col in src_fm.columns:  # pragma: no cover
+                if col.dimension == dim:  # pragma: no cover
                     joinable = True
                     break
             if joinable:

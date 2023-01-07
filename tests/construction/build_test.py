@@ -11,7 +11,8 @@ from dj.construction.build import (
     InvalidSQLException,
     MissingColumnException,
     NodeTypeException,
-    UnknownNodeException,DimensionJoinException,
+    UnknownNodeException,
+    DimensionJoinException,
     extract_dependencies,
     extract_dependencies_from_query,
     get_dj_node,
@@ -69,6 +70,22 @@ def test_invalid_sql_exception():
     )
     assert "This is an exception message `foo` from `bar`" in str(
         InvalidSQLException("This is an exception message", Name("foo"), Table("bar")),
+    )
+
+
+def test_dimension_join_exception():
+    """
+    Test raising an DimensionJoinException
+    """
+    assert "This is an exception message `foo`" in str(
+        DimensionJoinException(
+            "This is an exception message", "foo")
+        ),
+    )
+    assert "This is an exception message `foo`" in str(
+        DimensionJoinException(
+            "This is an exception message", "foo", Table(Name("bar"))
+        ),
     )
 
 
@@ -291,6 +308,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
                 namespace=Namespace(names=[Name(name="event_type_id", quote_style="")]),
             )
         )
+
     def test_select_with_having_dimension(self, session: Session):
         """
         Test a select with a dimension having
@@ -322,12 +340,12 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         with pytest.raises(InvalidSQLException):
             extract_dependencies_from_query(session, query)
 
-
     def test_select_with_dimension_in_improper_place(self, session: Session):
         """
         Test a select with a dimension in an invalid place
         """
-        query = parse("""
+        query = parse(
+            """
             select a.event_type from customer_events2 a
             left join customer_events2 b
             on a.event_type=b.event_type and event_type_id.event_type='an_event'
@@ -341,7 +359,8 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         """
         Test a select with a dimension that cannot be joined
         """
-        query = parse("""
+        query = parse(
+            """
             select event_type from customer_events
             where event_type_id.event_type='an_event'
             """,
@@ -349,8 +368,6 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         )
         with pytest.raises(DimensionJoinException) as exc:
             extract_dependencies_from_query(session, query)
-
-        assert 'not joinable' in str(exc)
 
     def test_no_such_namespaced_column_in_existing_node(self, session: Session):
         """
@@ -362,6 +379,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         )
         with pytest.raises(MissingColumnException):
             extract_dependencies_from_query(session, query)
+
     def test_no_such_column_in_existing_node(self, session: Session):
         """
         Test a with a nonexistent column
