@@ -381,7 +381,7 @@ def extract_dependencies_from_select(
                 )
                 if col.name.name in multiple_refs:
                     exc_msg = f"`{col.name.name}` appears in multiple references and so must be namespaced."  # pylint: disable=C0301
-                    exc = InvalidSQLException
+                    exc = InvalidSQLException  # type: ignore
             with CompoundBuildException().catch:
                 raise exc(exc_msg, col, col.parent)
 
