@@ -15,15 +15,16 @@ from dj.sql.parsing.ast import (
     Alias,
     Column,
     Named,
+    Namespace,
     Query,
     Select,
     Table,
-    TableExpression,Namespace
+    TableExpression,
 )
 from dj.sql.parsing.backends.sqloxide import parse
 
 
-def make_name(namespace: Namespace, name="") -> str:
+def make_name(namespace: Optional[Namespace], name="") -> str:
     """utility taking a namespace and name to make a possible name of a DJ Node"""
     ret = ""
     if namespace:
@@ -255,13 +256,11 @@ def _tables_to_namespaces(
     table: TableExpression,
     table_deps: SelectDependencies,
 ) -> Tuple[
-    Dict[str, Set[str]],
     List[Select],
     Dict[str, TableExpression],
     Tuple[Set[Node], Set[Node], Set[Node]],
 ]:
     """get all usable namespaces and columns from tables"""
-    
 
     # namespace: ast node defining namespace
     table_nodes: Dict[str, TableExpression] = {}

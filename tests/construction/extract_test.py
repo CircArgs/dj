@@ -1,6 +1,8 @@
 """
 Tests for building nodes and extracting dependencies
 """
+from typing import Optional
+
 # pylint: disable=too-many-lines
 import pytest
 from sqlmodel import Session, select
@@ -50,7 +52,7 @@ from dj.typing import ColumnType
         (Namespace([Name("a"), Name("b"), Name("c")]), "~~d", "a.b.c.~~d"),
     ],
 )
-def test_make_name(namespace: Namespace, name: str, expected_make_name: str):
+def test_make_name(namespace: Optional[Namespace], name: str, expected_make_name: str):
     """
     Test making names from a namespace and a name
     """
