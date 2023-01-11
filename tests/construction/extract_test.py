@@ -1541,7 +1541,7 @@ class TestExtractingDependencies:  # pylint: disable=too-many-public-methods
         with pytest.raises(DJException) as exc_info:
             get_dj_node(session, "foobar")
 
-        assert "No  node `foobar` exists." in str(exc_info.value)
+        assert "No node" in str(exc_info.value)
 
         with pytest.raises(DJException) as exc_info:
             get_dj_node(session, "foobar", kinds={NodeType.METRIC, NodeType.DIMENSION})

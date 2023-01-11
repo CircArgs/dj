@@ -105,7 +105,7 @@ def get_dj_node(
         CompoundBuildException().append(
             error=DJError(
                 code=ErrorCode.UNKNOWN_NODE,
-                message=f"No {kind_msg} node `{node_name}` exists.",
+                message=f"No node `{node_name}` exists of kind {kind_msg}.",
             ),
             message=f"Cannot get DJ node {node_name}",
         )
