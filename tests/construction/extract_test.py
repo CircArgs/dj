@@ -50,7 +50,7 @@ from dj.typing import ColumnType
         (Namespace([Name("a"), Name("b"), Name("c")]), "~~d", "a.b.c.~~d"),
     ],
 )
-def test_make_name(namespace: str, name: str, expected_make_name: str):
+def test_make_name(namespace: Namespace, name: str, expected_make_name: str):
     """
     Test making names from a namespace and a name
     """

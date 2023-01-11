@@ -18,12 +18,12 @@ from dj.sql.parsing.ast import (
     Query,
     Select,
     Table,
-    TableExpression,
+    TableExpression,Namespace
 )
 from dj.sql.parsing.backends.sqloxide import parse
 
 
-def make_name(namespace, name="") -> str:
+def make_name(namespace: Namespace, name="") -> str:
     """utility taking a namespace and name to make a possible name of a DJ Node"""
     ret = ""
     if namespace:
@@ -251,6 +251,7 @@ def _check_col(
 
 def _tables_to_namespaces(
     session: Session,
+    namespaces: Dict[str, Set[str]],
     table: TableExpression,
     table_deps: SelectDependencies,
 ) -> Tuple[
@@ -260,8 +261,7 @@ def _tables_to_namespaces(
     Tuple[Set[Node], Set[Node], Set[Node]],
 ]:
     """get all usable namespaces and columns from tables"""
-    # namespaces track the namespace: list of columns that can be had from it
-    namespaces: Dict[str, Set[str]] = {}
+    
 
     # namespace: ast node defining namespace
     table_nodes: Dict[str, TableExpression] = {}
@@ -338,7 +338,6 @@ def _tables_to_namespaces(
     table_nodes[namespace] = table
 
     return (
-        namespaces,
         subqueries,
         table_nodes,
         (dimension_columns, sources_transforms, dimensions_tables),
@@ -482,12 +481,10 @@ def extract_dependencies_from_select(
 
     for table in tables:
         (
-            _namespaces,
             _subqueries,
             _table_nodes,
             (_dimension_columns, _sources_transforms, _dimensions_tables),
-        ) = _tables_to_namespaces(session, table, table_deps)
-        namespaces.update(_namespaces)
+        ) = _tables_to_namespaces(session, namespaces, table, table_deps)
         subqueries += _subqueries
         table_nodes.update(_table_nodes)
         dimension_columns |= _dimension_columns
