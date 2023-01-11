@@ -63,7 +63,7 @@ def test_compound_build_exception():
     """
     CompoundBuildException().reset()
     CompoundBuildException().set_raise(False)  # pylint: disable=protected-access
-    CompoundBuildException().catch(
+    CompoundBuildException().append(
         error=DJError(
             code=ErrorCode.INVALID_SQL_QUERY,
             message="This SQL is invalid.",
