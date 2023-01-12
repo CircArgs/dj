@@ -570,6 +570,47 @@ def extract_dependencies_from_query(
     )
 
 
+def _extract_dependencies(
+    session: Session,
+    node: Node,
+    dialect: Optional[str] = None,
+    distance: int = -1,
+) -> Tuple[Set[Node], Set[str]]:
+    """Helper for extract_dependencies"""
+    _distance = float("inf") if distance < 0 else float(distance)
+    if node.query is None:
+        raise Exception("Node has no query")
+    ast = parse(node.query, dialect)
+    deps: QueryDependencies = extract_dependencies_from_query(session, ast)
+    dep_nodes: Set[Node] = deps.all_node_dependencies
+    bad_dep_nodes: Set[str] = set()
+    added = True
+    travelled = 0
+    new_dep_nodes: Set[Node] = set()
+    new_bad_dep_nodes: Set[str] = set()
+    while added and travelled < _distance:
+        for dep_node in dep_nodes:
+            if dep_node.type != NodeType.SOURCE:
+                extract_dep_nodes, extract_bad_dep_nodes = _extract_dependencies(
+                    session,
+                    dep_node,
+                    dialect,
+                )
+                new_dep_nodes |= extract_dep_nodes
+                new_bad_dep_nodes |= extract_bad_dep_nodes
+        curr_len = len(dep_nodes) + len(bad_dep_nodes)
+        dep_nodes |= new_dep_nodes
+        bad_dep_nodes |= new_bad_dep_nodes
+        added = curr_len != (len(dep_nodes) + len(bad_dep_nodes))
+        travelled += 1
+
+    for err in CompoundBuildException().errors:
+        if err.code in (ErrorCode.UNKNOWN_NODE, ErrorCode.NODE_TYPE_ERROR):
+            bad_dep_nodes.add(err.context)
+
+    return dep_nodes, bad_dep_nodes
+
+
 def extract_dependencies(
     session: Session,
     node: Node,
@@ -583,43 +624,17 @@ def extract_dependencies(
         <0 infinitely far,
         0 only neighbors e.g. only nodes referenced directly in the node query
     """
-    _distance = float("inf") if distance < 0 else float(distance)
-    if node.query is None:
-        raise Exception("Node has no query")
-    ast = parse(node.query, dialect)
     CompoundBuildException().reset()
     CompoundBuildException().set_raise(False)
-    deps: QueryDependencies = extract_dependencies_from_query(session, ast)
-    dep_nodes: Set[Node] = deps.all_node_dependencies
-    bad_dep_nodes: Set[str] = set()
-    added = True
-    travelled = 0
-    new_dep_nodes: Set[Node] = set()
-    new_bad_dep_nodes: Set[str] = set()
-    while added and travelled < _distance:
-        for dep_node in dep_nodes:
-            if dep_node.type != NodeType.SOURCE:
-                extract_dep_nodes, extract_bad_dep_nodes = extract_dependencies(
-                    session,
-                    dep_node,
-                    dialect,
-                )
-                new_dep_nodes |= extract_dep_nodes
-                new_bad_dep_nodes |= extract_bad_dep_nodes
-        curr_len = len(dep_nodes) + len(bad_dep_nodes)
-        dep_nodes |= new_dep_nodes
-        bad_dep_nodes |= new_bad_dep_nodes
-        added = curr_len != (len(dep_nodes) + len(bad_dep_nodes))
-        travelled += 1
+
+    dep_nodes, bad_dep_nodes = _extract_dependencies(
+        session=session, node=node, dialect=dialect, distance=distance,
+    )
 
     if CompoundBuildException().errors and raise_:
         raise DJException(
             message=f"Cannot extract dependencies from node `{node.name}`",
             errors=CompoundBuildException().errors,
         )
-
-    for err in CompoundBuildException().errors:
-        if err.code in (ErrorCode.UNKNOWN_NODE, ErrorCode.NODE_TYPE_ERROR):
-            bad_dep_nodes.add(err.context)
 
     return dep_nodes, bad_dep_nodes
