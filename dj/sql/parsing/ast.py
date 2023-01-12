@@ -12,13 +12,17 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Set,
     Tuple,
     Type,
     TypeVar,
     Union,
 )
 
+from dj.models.node import Node as DJNode
+from dj.models.node import NodeType as DJNodeType
 from dj.sql.parsing.backends.exceptions import DJParseException
+from dj.typing import ColumnType
 
 PRIMITIVES = {int, float, str, bool, type(None)}
 
@@ -255,7 +259,7 @@ class Node(ABC):
                 self.fields(
                     flat=True,
                     nodes_only=False,
-                    obfuscated=True,
+                    obfuscated=False,
                     nones=True,
                     named=False,
                 ),
@@ -525,17 +529,48 @@ class Alias(Named, Generic[NodeType]):
 class Column(Named):
     """column used in statements"""
 
-    _table: Optional["Table"] = field(repr=False, default=None)
+    _table: Optional["TableExpression"] = field(repr=False, default=None)
+    _type: Optional["ColumnType"] = field(repr=False, default=None)
+    _expression: Optional[Expression] = field(repr=False, default=None)
 
     @property
-    def table(self) -> Optional["Table"]:
+    def type(self) -> Optional[ColumnType]:
+        """return the type of the column"""
+        return self._type
+
+    def add_type(self, type: ColumnType) -> "Column":
+        """add a referenced type"""
+        if self._type is None:
+            self._type = type
+        return self
+
+    @property
+    def expression(self) -> Optional[Expression]:
+        """return the dj_node referenced by this table"""
+        return self._expression
+
+    def add_expression(self, expression: "Expression") -> "Column":
+        """add a referenced expression"""
+        if self._expression is None:
+            self._expression = expression
+        return self
+
+    @property
+    def table(self) -> Optional["TableExpression"]:
         """return the table the column was referenced from"""
         return self._table
 
-    def add_table(self, table: "Table") -> "Column":
+    def add_table(self, table: "TableExpression") -> "Column":
         """add a referenced table"""
         if self._table is None:
             self._table = table
+        # add column to table if it's a Table or Alias[Table]
+        if isinstance(self._table, Alias):
+            table_ = self._table.child  # type: ignore
+        else:
+            table_ = self._table
+        if isinstance(table_, Table):
+            table_.add_columns(self)
         return self
 
     def __str__(self) -> str:
@@ -575,18 +610,38 @@ class Wildcard(Expression):
 class Table(Named):
     """a type for tables"""
 
-    _columns: List[Column] = field(repr=False, default_factory=list)
+    _columns: Set[Column] = field(repr=False, default_factory=set)
+    _dj_node: Optional[DJNode] = field(repr=False, default=None)
 
     @property
-    def columns(self) -> List[Column]:
+    def dj_node(self) -> Optional[DJNode]:
+        """return the dj_node referenced by this table"""
+        return self._dj_node
+
+    def add_dj_node(self, dj_node: DJNode) -> "Table":
+        """add dj_node referenced by this table"""
+        if dj_node.type not in (
+            DJNodeType.TRANSFORM,
+            DJNodeType.SOURCE,
+            DJNodeType.DIMENSION,
+        ):
+            raise DJParseException(
+                f"Expected dj node of TRANSFORM, SOURCE, or DIMENSION but got {dj_node.type}.",
+            )
+        self._dj_node = dj_node
+        return self
+
+    @property
+    def columns(self) -> Set[Column]:
         """return the columns referenced from this table"""
         return self._columns
 
     def add_columns(self, *columns: Column) -> "Table":
         """add columns referenced from this table"""
         for column in columns:
-            self._columns.append(column)
-            column.add_table(self)
+            if column not in self._columns:
+                self._columns.add(column)
+                column.add_table(self)
         return self
 
     def __str__(self) -> str:

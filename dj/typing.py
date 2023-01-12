@@ -53,6 +53,7 @@ class ColumnType(str, Enum):
     These represent the values from the ``python_type`` attribute in SQLAlchemy columns.
     """
 
+    WILDCARD = "*"
     BYTES = "BYTES"
     STR = "STR"
     FLOAT = "FLOAT"
@@ -65,6 +66,9 @@ class ColumnType(str, Enum):
     TIMEDELTA = "TIMEDELTA"
     LIST = "LIST"
     DICT = "DICT"
+
+
+NUMERIC_COLUMN_TYPES = {ColumnType.INT, ColumnType.FLOAT}
 
 
 class TypeEnum(str, Enum):

@@ -95,7 +95,7 @@ class Function:  # pylint: disable=too-few-public-methods
 
     @staticmethod
     @abc.abstractmethod
-    def infer_type(*args: Any) -> ColumnType:
+    def infer_type(*args: Union[ColumnType, Column]) -> ColumnType:
         raise NotImplementedError("Subclass MUST implement infer_type")
 
     @staticmethod
@@ -112,7 +112,22 @@ class Count(Function):
     is_aggregation = True
 
     @staticmethod
-    def infer_type(argument: Union["Wildcard", Column, int]) -> ColumnType:  # type: ignore
+    def infer_type(argument: Union[Column, ColumnType]) -> ColumnType:  # type: ignore
+        type_: ColumnType = (
+            argument if isinstance(argument, ColumnType) else argument.type
+        )
+        acceptable = {ColumnType.INT, ColumnType.WILDCARD}
+        if type_ not in acceptable:
+            raise DJInvalidInputException(
+                message="COUNT type must be WILDCARD or INT",
+                errors=[
+                    DJError(
+                        code=ErrorCode.INVALID_ARGUMENTS_TO_FUNCTION,
+                        message=("Illegal type passed to COUNT"),
+                        debug={"context": {"types": acceptable}},
+                    ),
+                ],
+            )
         return ColumnType.INT
 
     @staticmethod
@@ -279,8 +294,11 @@ class Min(Function):
     is_aggregation = True
 
     @staticmethod
-    def infer_type(column: Column) -> ColumnType:  # type: ignore
-        return column.type
+    def infer_type(argument: Union[Column, ColumnType]) -> ColumnType:  # type: ignore
+        type_: ColumnType = (
+            argument if isinstance(argument, ColumnType) else argument.type
+        )
+        return type_
 
     @staticmethod
     def get_sqla_function(  # type: ignore
@@ -299,8 +317,11 @@ class Max(Function):
     is_aggregation = True
 
     @staticmethod
-    def infer_type(column: Column) -> ColumnType:  # type: ignore
-        return column.type
+    def infer_type(argument: Union[Column, ColumnType]) -> ColumnType:  # type: ignore
+        type_: ColumnType = (
+            argument if isinstance(argument, ColumnType) else argument.type
+        )
+        return type_
 
     @staticmethod
     def get_sqla_function(  # type: ignore
@@ -394,8 +415,11 @@ class Sum(Function):
     is_aggregation = True
 
     @staticmethod
-    def infer_type(column: Column) -> ColumnType:  # type: ignore
-        return column.type
+    def infer_type(argument: Union[Column, ColumnType]) -> ColumnType:  # type: ignore
+        type_: ColumnType = (
+            argument if isinstance(argument, ColumnType) else argument.type
+        )
+        return type_
 
     @staticmethod
     def get_sqla_function(  # type: ignore
