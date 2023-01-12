@@ -25,12 +25,13 @@ def extract_dependencies(
 
     tree = parse(query, dialect)
     compile_query(session, tree)
-    deps = {t.dj_node for t in tree.find_all(ast.Table) if t.dj_node}
-    danglers = {
-        make_name(t.namespace, t.name.name)
-        for t in tree.find_all(ast.Table)
-        if not t.dj_node
-    }
+    deps, danglers = set(), set()
+    for table in tree.find_all(ast.Table):
+        if table.dj_node:
+            deps.add(table.dj_node)
+        else:
+            danglers.add(make_name(table.namespace, table.name.name))
+
 
     if CompoundBuildException().errors and raise_:
         raise DJException(
