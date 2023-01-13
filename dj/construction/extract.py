@@ -32,7 +32,6 @@ def extract_dependencies(
         else:
             danglers.add(make_name(table.namespace, table.name.name))
 
-
     if CompoundBuildException().errors and raise_:
         raise DJException(
             message=f"Cannot extract dependencies from query `{query}`",

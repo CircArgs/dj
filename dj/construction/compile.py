@@ -244,7 +244,7 @@ def _check_col(
 
     if namespace:  # there is a proposed namespace that has the column
         add.append((col, table_nodes[namespace]))
-        col.add_table(table_nodes[namespace])
+        col.add_table(table_nodes[namespace].alias_or_self())
         col_exp = namespaces[namespace][col.name.name]
         if isinstance(col_exp, Expression):
             col.add_expression(col_exp)
@@ -255,7 +255,7 @@ def _check_col(
 
             if col.name.name in nmspc_cols:
                 add.append((col, table_nodes[nmpsc]))
-                col.add_table(table_nodes[nmpsc])
+                col.add_table(table_nodes[nmpsc].alias_or_self())
 
                 col_exp = namespaces[nmpsc][col.name.name]
                 if isinstance(col_exp, Expression):
@@ -314,7 +314,7 @@ def _tables_to_namespaces(
         )
 
     namespaces[namespace] = {}
-
+    
     if isinstance(table, Alias):
         table: Union[Table, Select] = table.child  # type: ignore
 
@@ -463,6 +463,10 @@ def _validate_groupby_filters_ons_columns(
                         )
                     else:
                         add.append((col, dim))
+                        dim_table = Table(col.namespace.names[0], Namespace(col.namespace.names[1:]))
+                        dim_table.add_dj_node(dim)
+                        col.namespace = None
+                        col.add_table(dim_table)
                         dimension_columns.add(dim)
     return dimension_columns
 

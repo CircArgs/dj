@@ -4,11 +4,12 @@ Functions for type inference.
 
 # pylint: disable=unused-argument
 
+from functools import singledispatch
+
 from dj.sql.functions import function_registry
 from dj.sql.parsing import ast
-from dj.typing import ColumnType
 from dj.sql.parsing.backends.exceptions import DJParseException
-from functools import singledispatch
+from dj.typing import ColumnType
 
 
 @singledispatch

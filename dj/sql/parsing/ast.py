@@ -23,6 +23,8 @@ from dj.models.node import Node as DJNode
 from dj.models.node import NodeType as DJNodeType
 from dj.sql.parsing.backends.exceptions import DJParseException
 from dj.typing import ColumnType
+from dj.construction.inference import get_type_of_expression
+
 
 PRIMITIVES = {int, float, str, bool, type(None)}
 
@@ -197,6 +199,44 @@ class Node(ABC):
             named=False,
         )
 
+    def replace(self: TNode, from_: Any, to: Any) -> TNode:
+        """Replace a node `from_` with a node `to` in the subtree"""
+
+        for name, child in self.fields(
+            flat=False,
+            nodes_only=False,
+            obfuscated=True,
+            nones=False,
+            named=True,
+        ):
+            iterable = False
+            for iterable_type in (list, tuple, set):
+                if isinstance(child, iterable_type):
+                    iterable = True
+                    new = []
+                    for c in child:
+                        if not c.compare(
+                            from_
+                        ):  # if the node is not a match, keep the old
+                            new.append(c)
+                        else:
+                            new.append(to)
+                        if isinstance(c, Node):
+                            c.replace(from_, to)
+                    new = iterable_type(new)  # type: ignore
+                    setattr(self, name, new)
+            if not iterable:
+                if isinstance(child, Node):
+                    if child.compare(from_):
+                        setattr(self, name, to)
+                else:
+                    if child == from_:
+                        setattr(self, name, to)
+            if isinstance(child, Node):
+                child.replace(from_, to)
+
+        return self
+
     def filter(self, func: Callable[["Node"], bool]) -> Iterator["Node"]:
         """find all nodes that `func` returns `True` for"""
         if func(self):
@@ -277,7 +317,7 @@ TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C010
 class Expression(Node):
     """an expression type simply for type checking"""
 
-    def alias_or_self(self: TExpression) -> TExpression:
+    def alias_or_self(self: TExpression) -> Union[TExpression, "Alias[TExpression]"]:
         """get the alias name of an expression if it is the descendant of an alias otherwise get its own name"""  # pylint: disable=C0301
         if isinstance(self.parent, Alias):
             return self.parent  # type: ignore
@@ -346,10 +386,10 @@ class Named(Expression):
     namespace: Optional[Namespace] = None
 
     def add_namespace(self: TNamed, namespace: Optional[Namespace]) -> TNamed:
-        """add a namespace to the Table if one does not exist"""
+        """add a namespace to the Named if one does not exist"""
         if self.namespace is None:
             self.namespace = namespace
-        return self.add_self_as_parent()
+        return self
 
     def alias_or_name(self) -> Name:
         """get the alias name of a node if it is the descendant of an alias otherwise get its own name"""  # pylint: disable=C0301
@@ -519,7 +559,7 @@ NodeType = TypeVar("NodeType", bound=Node)  # pylint: disable=C0103
 class Alias(Named, Generic[NodeType]):
     """wraps node types with an alias"""
 
-    child: Node = field(default_factory=Node)
+    child: NodeType = field(default_factory=Node)
 
     def __str__(self) -> str:
         return f"{self.child} AS {self.name}"
@@ -534,9 +574,11 @@ class Column(Named):
     _expression: Optional[Expression] = field(repr=False, default=None)
 
     @property
-    def type(self) -> Optional[ColumnType]:
+    def type(self) -> ColumnType:
         """return the type of the column"""
-        return self._type
+        if self._type:
+            return self._type 
+        return get_type_of_expression(self)
 
     def add_type(self, type: ColumnType) -> "Column":
         """add a referenced type"""
@@ -574,6 +616,7 @@ class Column(Named):
         return self
 
     def __str__(self) -> str:
+        
         prefix = "" if self.namespace is None else str(self.namespace)
         if self.table is not None:
             prefix += "" if not prefix else "."
