@@ -36,7 +36,7 @@ from dj.models.node import Node, NodeType, NodeYAML
 from dj.models.query import Query  # pylint: disable=unused-import
 from dj.models.table import Table
 from dj.sql.dag import render_dag
-from dj.sql.inference import infer_columns
+from dj.construction.inference import infer_columns
 from dj.sql.parse import get_dependencies
 from dj.typing import ColumnType
 from dj.utils import (

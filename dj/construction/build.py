@@ -8,29 +8,9 @@ from sqlmodel import Session
 
 from dj.errors import DJError, DJException, ErrorCode
 from dj.models.node import Node, NodeType
-from dj.sql.parsing.ast import (
-    Alias,
-    Node as ASTNode,
-    Column,
-    Expression,
-    Named,
-    Name,
-    Namespace,
-    Query,
-    Select,
-    Table,
-    TableExpression,
-    BinaryOp,
-    BinaryOpKind,
-    Join,
-    JoinKind,
-)
+from dj.sql.parsing import ast
 from dj.sql.parsing.backends.sqloxide import parse
-from dj.construction.compile import (
-    ColumnDependencies,
-    SelectDependencies,
-    QueryDependencies,
-)
+
 from functools import reduce
 from string import ascii_letters, digits
 
@@ -79,143 +59,87 @@ def amenable_name(name: str) -> str:
 
 # flake8: noqa: C901
 def build_select(
-    session: Session,
-    select: Select,
-    deps: SelectDependencies,
+    select: ast.Select,
     dialect: Optional[str] = None,
 ):
-    # roll nodes up into categories
-    # we roll up so we only handle a node once for all references
-    dimension_columns: Dict[str, Tuple[Node, List[Column]]] = dict()
-    transforms: Dict[str, Tuple[Node, List[Table]]] = dict()
-    sources: Dict[str, Tuple[Node, List[Table]]] = dict()
-    dimensions_tables: Dict[str, Tuple[Node, List[Table]]] = dict()
+    """transforms a select ast by replacing dj node references with their asts"""
+    dimension_columns: Dict[Node, List[ast.Column]] = {}
+    tables: Dict[Node, List[ast.Table]] = {}
 
-    for col, ref_node in deps.columns.all_columns:
-        if isinstance(ref_node, Node) and ref_node.type == NodeType.DIMENSION:
-            if ref_node.name in dimension_columns:
-                dimension_columns[ref_node.name][1].append(col)
-            else:
-                dimension_columns[ref_node.name] = (ref_node, [col])
+    for table in select.find_all(ast.Table):
+        node = table.dj_node
+        tables[node] = (tables.get(node) or [])
+        tables[node].append(table)
+            
+    for col in select.find_all(ast.Column):
+        if isinstance(col.table, ast.Table):
+            if node:= col.table.dj_node:
+                if node.type == NodeType.DIMENSION:
+                    dimension_columns[node] = (dimension_columns.get(node) or [])
+                    dimension_columns[node].append(col)
 
-    for ref, ref_node in deps.tables:
-        if ref_node.type == NodeType.DIMENSION:
-            if ref_node.name in dimensions_tables:
-                dimensions_tables[ref_node.name][1].append(ref)
-            else:
-                dimensions_tables[ref_node.name] = (ref_node, [ref])
+    for dim_node, dim_cols in dimension_columns.items():
+        if dim_node not in tables:# need to join dimension
+            alias = amenable_name(dim_node.name)
+            join_info: Dict[str, Tuple[Node, List[Column]]] = {}
+            for table_node in tables:
+                join_dim_cols = [col for col in table_node.columns if col.dimension == dim_node]
+                join_info[table_node] = join_dim_cols
+            dim_query = parse(dim_node.query, dialect)
+            
+            
+            if dim_query.ctes: #will have to build ctes in as subqueries to the select
+                raise Exception("DJ does not currently support ctes here.")
+            
+            dim_select = dim_query.select
+            dim_ast = ast.Alias(ast.Name(alias), child=dim_select)
+            for dim_col in dim_cols:
+                dim_col.add_table(dim_select)
+            
+            joins: List[ast.Join] = []
 
-        if ref_node.type == NodeType.SOURCE:
-            if ref_node.name in sources:
-                sources[ref_node.name][1].append(ref)
-            else:
-                sources[ref_node.name] = (ref_node, [ref])
-
-        if ref_node.type == NodeType.TRANSFORM:
-            if ref_node.name in transforms:
-                transforms[ref_node.name][1].append(ref)
-            else:
-                transforms[ref_node.name] = (ref_node, [ref])
-
-    # handle dimensions; join if needed
-    for dim_name, (dim, cols) in dimension_columns.items():
-        # if the dimension was not used as a table we will need to join
-        if dim_name not in dimensions_tables:
-            # alias used for the dimension throughout the query
-            alias = amenable_name(dim.name)
-            # find all sources, transforms and dimension tables that can join the dimension
-            joinable = False
-            join_info: Dict[str, Tuple[Node, List[Table]]] = {}
-            # str, (DJ Node, [AST Table Node])
-            for table_name, (table_node, tables) in chain(
-                transforms.items(),
-                sources.items(),
-                dimensions_tables.items(),
-            ):
-                dim_cols = [col for col in table_node.columns if col.dimension == dim]
-                join_info[table_name] = (
-                    tables,
-                    dim_cols,
-                )
-                if dim_cols:
-                    joinable = True
-            if not joinable:
-                raise Exception(
-                    f"""Dimension `{dim_name}` is not joinable. A SOURCE, TRANSFORM, or DIMENSION node which references this dimension must be used directly in the FROM clause:\n `{str(select.from_)}`.""",
-                )
-
-            dim_ast = Alias(Name(alias), child=parse(dim.query, dialect))
-
-            # AST Column
-            for col in cols:
-                col.namespace = Namespace([Name(alias)])
-
-            joins: List[Join] = []
-            # [AST Table], [DJ Node Column]
-            for tables, cols in join_info.values():
-                for table in tables:
+            for table_node, cols in join_info.items():
+                ast_tables = tables[table_node]
+                for table in ast_tables:
                     on = []
                     for col in cols:
                         on.append(
-                            BinaryOp(
-                                BinaryOpKind.Eq,
-                                Column(Name(col.name), _table=table),
-                                Column(
-                                    Name(col.dimension_column),
-                                    Namespace([Name(alias)]),
+                            ast.BinaryOp(
+                                ast.BinaryOpKind.Eq,
+                                ast.Column(ast.Name(col.name), _table=table),
+                                ast.Column(
+                                    ast.Name(col.dimension_column), _table = dim_ast
                                 ),
                             ),
                         )
                 joins.append(
-                    Join(
-                        JoinKind.LeftOuterdim,
+                    ast.Join(
+                        ast.JoinKind.LeftOuter,
                         dim_ast,
-                        reduce(lambda l, r: BinaryOp(BinaryOpKind.And, l, r), on),
+                        reduce(lambda l, r: ast.BinaryOp(ast.BinaryOpKind.And, l, r), on),
                     ),
                 )
-
+            
             select.from_.joins += joins
-
-    # handle all nodes referenced as tables
-    for node_name, (node, tables) in chain(
-        transforms.items(),
-        dimensions_tables.items(),
-    ):
-        alias = amenable_name(node.name)
-        table_ast = Alias(Name(alias), child=parse(node.query, dialect))
-        for exp, col in zip(table_ast.child.select.projection, node.columns):
-            if not isinstance(exp, Named):
-                to = Alias(Name(col.name), child = exp)
-                exp.parent.replace(exp, to)
-        for table in tables:
-            parent = table.parent
-            parent.replace(table, table_ast)
-            # if not isinstance(
-            #     parent,
-            #     Alias,
-            # ):  # if the table is not already aliased we will need to alias it and replace column refs
-            #     for (
-            #         col,
-            #         node,
-            #     ) in (
-            #         deps.columns.all_columns
-            #     ):  # find columns that referenced the table to replace their namespace
-            #         if isinstance(node, ASTNode):
-            #             if id(node) == id(table):
-            #                 col.namespace = Namespace([Name(alias)])
-
-    # We do not do anything about source nodes - for source, (source_node, table) in sources.items():
-
-    for subquery, subquery_deps in deps.subqueries:
-        build_select(session, subquery, subquery_deps, dialect)
+            
+    for node, tbls in tables.items():
+        if node.type!=NodeType.SOURCE:
+            node_query = parse(node.query, dialect)
+            
+            
+            if node_query.ctes: #will have to build ctes in as subqueries to the select
+                raise Exception("DJ does not currently support ctes here.")
+            
+            node_select = node_query.select
+            node_ast = ast.Alias(ast.Name(alias), child=node_select)
+            for tbl in tbls:
+                select.replace(tbl, node_ast)
 
 
 def build_query(
-    session: Session,
-    query: Query,
-    deps: QueryDependencies,
+    query: ast.Query,
     dialect: Optional[str] = None,
 ):
-    for cte in query.ctes:
-        build_select(session, cte.child, deps.select, dialect)
-    build_select(session, query.select, deps.select, dialect)
+
+    """transforms a query ast by replacing dj node references with their asts"""
+    build_select(query.to_select(), dialect)

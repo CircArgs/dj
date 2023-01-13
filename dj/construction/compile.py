@@ -126,80 +126,11 @@ def get_dj_node(
     return match
 
 
-@dataclass
-class ColumnDependencies:
-    """Columns discovered from a query"""
-
-    projection: List[Tuple[Column, TableExpression]] = field(
-        default_factory=list,
-    )  # selected nodes
-    group_by: List[Tuple[Column, Union[TableExpression, Node]]] = field(
-        default_factory=list,
-    )
-    filters: List[Tuple[Column, Union[TableExpression, Node]]] = field(
-        default_factory=list,
-    )  # where/having
-    ons: List[Tuple[Column, Union[TableExpression, Node]]] = field(
-        default_factory=list,
-    )  # join ons
-
-    @property
-    def all_columns(
-        self,
-    ) -> Generator[Tuple[Column, Union[TableExpression, Node]], None, None]:
-        """get all column, node pairs"""
-        for pair in chain(
-            iter(self.projection),
-            iter(self.group_by),
-            iter(self.filters),
-            iter(self.ons),
-        ):
-            yield pair
-
-
-@dataclass
-class SelectDependencies:
-    """stores all the dependencies found in a select statement"""
-
-    tables: List[Tuple[TableExpression, Node]] = field(default_factory=list)
-    columns: ColumnDependencies = field(default_factory=ColumnDependencies)
-    subqueries: List[Tuple[Select, "SelectDependencies"]] = field(default_factory=list)
-
-    @property
-    def all_tables(self) -> Generator[Tuple[TableExpression, Node], None, None]:
-        "get all table node, dj node pairs"
-        for table in self.tables:
-            yield table
-        for _, subquery in self.subqueries:
-            for table in subquery.all_tables:
-                yield table
-
-    @property
-    def all_node_dependencies(self) -> Set[Node]:
-        """get all dj nodes referenced"""
-        return {node for _, node in self.all_tables if isinstance(node, Node)} | {
-            node for _, node in self.columns.all_columns if isinstance(node, Node)
-        }
-
-
-@dataclass
-class QueryDependencies:
-    """stores all dependencies found in a query statement"""
-
-    ctes: List[SelectDependencies] = field(default_factory=list)
-    select: SelectDependencies = field(default_factory=SelectDependencies)
-
-    @property
-    def all_node_dependencies(self) -> Set[Node]:
-        """get all dj nodes referenced"""
-        ret = self.select.all_node_dependencies
-        return ret
 
 
 def _check_col(
     col: Column,
     table_nodes: Dict[str, TableExpression],
-    add: List[Tuple[Column, Union[TableExpression, Node]]],
     multiple_refs: Set[str],
     namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
 ) -> Optional[str]:
@@ -243,7 +174,6 @@ def _check_col(
         return None
 
     if namespace:  # there is a proposed namespace that has the column
-        add.append((col, table_nodes[namespace]))
         col.add_table(table_nodes[namespace].alias_or_self())
         col_exp = namespaces[namespace][col.name.name]
         if isinstance(col_exp, Expression):
@@ -254,7 +184,6 @@ def _check_col(
         for nmpsc, nmspc_cols in namespaces.items():  # pragma: no cover
 
             if col.name.name in nmspc_cols:
-                add.append((col, table_nodes[nmpsc]))
                 col.add_table(table_nodes[nmpsc].alias_or_self())
 
                 col_exp = namespaces[nmpsc][col.name.name]
@@ -270,7 +199,6 @@ def _tables_to_namespaces(
     session: Session,
     namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
     table: TableExpression,
-    table_deps: SelectDependencies,
 ) -> Tuple[
     List[Select],
     Dict[str, TableExpression],
@@ -347,7 +275,6 @@ def _tables_to_namespaces(
         )
         if table_node is not None:
             namespaces[namespace].update({c.name: c for c in table_node.columns})
-            table_deps.tables.append((table, table_node))
             if table_node.type in (NodeType.SOURCE, NodeType.TRANSFORM):
                 sources_transforms.add(table_node)
             else:
@@ -367,7 +294,6 @@ def _validate_groupby_filters_ons_columns(
     session: Session,
     select: Select,
     table_nodes: Dict[str, TableExpression],
-    table_deps: SelectDependencies,
     multiple_refs: Set[str],
     namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
 ) -> Set[Node]:
@@ -377,17 +303,17 @@ def _validate_groupby_filters_ons_columns(
     dimension_columns: Set[Node] = set()
 
     gbfo: List[
-        Tuple[List[Tuple[Column, Union[TableExpression, Node]]], Column, bool]
+        Tuple[Column, bool]
     ] = []
 
     if select.group_by:
         gbfo += [
-            (table_deps.columns.group_by, col, True)
+            (col, True)
             for col in chain(*(exp.find_all(Column) for exp in select.group_by))
         ]
         if select.having:
             gbfo += [
-                (table_deps.columns.filters, col, True)
+                (col, True)
                 for col in select.having.find_all(Column)
             ]
     elif select.having:
@@ -402,21 +328,21 @@ def _validate_groupby_filters_ons_columns(
 
     if select.where:
         gbfo += [
-            (table_deps.columns.filters, col, True)
+            (col, True)
             for col in select.where.find_all(Column)
         ]
 
     if select.from_.joins:
         for join in select.from_.joins:
             gbfo += [
-                (table_deps.columns.ons, col, False) for col in join.on.find_all(Column)
+                (col, False) for col in join.on.find_all(Column)
             ]
 
-    for add, col, dim_allowed in gbfo:
+    for col, dim_allowed in gbfo:
         bad_namespace = False
         bad_col_exc = None
         try:
-            namespace = _check_col(col, table_nodes, add, multiple_refs, namespaces)  # type: ignore
+            namespace = _check_col(col, table_nodes, multiple_refs, namespaces)  # type: ignore
             bad_namespace = namespace is None
         except DJException as exc:
             bad_col_exc = exc
@@ -462,7 +388,6 @@ def _validate_groupby_filters_ons_columns(
                             message="Cannot extract dependencies from SELECT",
                         )
                     else:
-                        add.append((col, dim))
                         dim_table = Table(col.namespace.names[0], Namespace(col.namespace.names[1:]))
                         dim_table.add_dj_node(dim)
                         col.namespace = None
@@ -475,14 +400,12 @@ def _validate_groupby_filters_ons_columns(
 def compile_select(
     session: Session,
     select: Select,  # pylint: disable= W0621
-) -> SelectDependencies:
+):
     """get all dj node dependencies from a sql select while validating"""
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
     # then we check the select, groupby,
     # having/where for the columns keeping track of where they came from
-
-    table_deps = SelectDependencies()
 
     # depth 1 tables
     tables = select.from_.tables + [join.table for join in select.from_.joins]
@@ -506,7 +429,7 @@ def compile_select(
             _subqueries,
             _table_nodes,
             (_dimension_columns, _sources_transforms, _dimensions_tables),
-        ) = _tables_to_namespaces(session, namespaces, table, table_deps)
+        ) = _tables_to_namespaces(session, namespaces, table)
         subqueries += _subqueries
         table_nodes.update(_table_nodes)
         dimension_columns |= _dimension_columns
@@ -537,7 +460,6 @@ def compile_select(
         _check_col(
             cast(Column, col),
             table_nodes,
-            table_deps.columns.projection,
             multiple_refs,
             namespaces,
         )
@@ -546,7 +468,6 @@ def compile_select(
         session,
         select,
         table_nodes,
-        table_deps,
         multiple_refs,
         namespaces,
     )
@@ -580,21 +501,13 @@ def compile_select(
             )
 
     for subquery in subqueries:
-        table_deps.subqueries.append(
-            (
-                subquery,
-                compile_select(session, subquery),
-            ),
-        )
-
-    return table_deps
+        compile_select(session, subquery)
 
 
 def compile_query(
     session: Session,
     query: Query,
-) -> QueryDependencies:
+):
     """get all dj node dependencies from a sql query while validating"""
-    return QueryDependencies(
-        select=compile_select(session, query.select),
-    )
+    compile_select(session, query.to_select())
+    

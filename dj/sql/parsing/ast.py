@@ -23,8 +23,7 @@ from dj.models.node import Node as DJNode
 from dj.models.node import NodeType as DJNodeType
 from dj.sql.parsing.backends.exceptions import DJParseException
 from dj.typing import ColumnType
-from dj.construction.inference import get_type_of_expression
-
+from copy import deepcopy
 
 PRIMITIVES = {int, float, str, bool, type(None)}
 
@@ -78,6 +77,9 @@ class Node(ABC):
         """remove parent from the node"""
         self.parent = None
         return self
+    def copy(self: TNode)->TNode:
+        """deepcopy a node"""
+        return deepcopy(self)
 
     def set_parent(self: TNode, parent: "Node", parent_key: str) -> TNode:
         """add parent to the node"""
@@ -574,11 +576,9 @@ class Column(Named):
     _expression: Optional[Expression] = field(repr=False, default=None)
 
     @property
-    def type(self) -> ColumnType:
+    def type(self) -> Optional[ColumnType]:
         """return the type of the column"""
-        if self._type:
-            return self._type 
-        return get_type_of_expression(self)
+        return self._type 
 
     def add_type(self, type: ColumnType) -> "Column":
         """add a referenced type"""
@@ -604,8 +604,7 @@ class Column(Named):
 
     def add_table(self, table: "TableExpression") -> "Column":
         """add a referenced table"""
-        if self._table is None:
-            self._table = table
+        self._table = table
         # add column to table if it's a Table or Alias[Table]
         if isinstance(self._table, Alias):
             table_ = self._table.child  # type: ignore
@@ -620,9 +619,9 @@ class Column(Named):
         prefix = "" if self.namespace is None else str(self.namespace)
         if self.table is not None:
             prefix += "" if not prefix else "."
-            if isinstance(self.table.parent, Alias):
-                prefix += str(self.table.parent.name)
-            else:
+            if isinstance(self.table, Alias):
+                prefix += str(self.table.name)
+            elif isinstance(self.table, Table):
                 prefix += str(self.table)
         prefix += "." if prefix else ""
         return prefix + str(self.name)
@@ -776,6 +775,12 @@ class Query(Expression):
 
     select: "Select"
     ctes: List[Alias["Select"]] = field(default_factory=list)
+
+    def to_select(self)-> Select:
+        for cte in self.ctes:
+            table = Table(cte.name, cte.namespace)
+            self.select.replace(table, cte)
+        return self.select
 
     def __str__(self) -> str:
         subquery = bool(self.parent)
