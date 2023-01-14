@@ -77,7 +77,8 @@ class Node(ABC):
         """remove parent from the node"""
         self.parent = None
         return self
-    def copy(self: TNode)->TNode:
+
+    def copy(self: TNode) -> TNode:
         """deepcopy a node"""
         return deepcopy(self)
 
@@ -201,9 +202,15 @@ class Node(ABC):
             named=False,
         )
 
-    def replace(self: TNode, from_: Any, to: Any) -> TNode:
+    def replace(
+        self: TNode,
+        from_: Any,
+        to: Any,
+        compare: Optional[Callable[[Any, Any], bool]] = None,
+    ) -> TNode:
         """Replace a node `from_` with a node `to` in the subtree"""
-
+        if compare is None:
+            compare = lambda a, b: a.compare(b) if isinstance(a, Node) else a == b
         for name, child in self.fields(
             flat=False,
             nodes_only=False,
@@ -217,25 +224,25 @@ class Node(ABC):
                     iterable = True
                     new = []
                     for c in child:
-                        if not c.compare(
+                        if not compare(c, 
                             from_
                         ):  # if the node is not a match, keep the old
                             new.append(c)
                         else:
                             new.append(to)
                         if isinstance(c, Node):
-                            c.replace(from_, to)
+                            c.replace(from_, to, compare)
                     new = iterable_type(new)  # type: ignore
                     setattr(self, name, new)
             if not iterable:
                 if isinstance(child, Node):
-                    if child.compare(from_):
+                    if compare(child, from_):
                         setattr(self, name, to)
                 else:
-                    if child == from_:
+                    if compare(child, from_):
                         setattr(self, name, to)
             if isinstance(child, Node):
-                child.replace(from_, to)
+                child.replace(from_, to, compare)
 
         return self
 
@@ -243,6 +250,7 @@ class Node(ABC):
         """find all nodes that `func` returns `True` for"""
         if func(self):
             yield self
+        
         for node in chain(*[child.filter(func) for child in self.children]):
             yield node
 
@@ -260,7 +268,8 @@ class Node(ABC):
 
     def compare(self, other: "Node") -> bool:
         """a compare two ASTs"""
-
+        if type(self) != type(other):
+            return False
         return id(self) == id(other) or hash(self) == hash(other)
 
     def diff(self, other: "Node") -> List[Tuple["Node", "Node"]]:
@@ -578,7 +587,7 @@ class Column(Named):
     @property
     def type(self) -> Optional[ColumnType]:
         """return the type of the column"""
-        return self._type 
+        return self._type
 
     def add_type(self, type: ColumnType) -> "Column":
         """add a referenced type"""
@@ -615,7 +624,7 @@ class Column(Named):
         return self
 
     def __str__(self) -> str:
-        
+
         prefix = "" if self.namespace is None else str(self.namespace)
         if self.table is not None:
             prefix += "" if not prefix else "."
@@ -776,7 +785,12 @@ class Query(Expression):
     select: "Select"
     ctes: List[Alias["Select"]] = field(default_factory=list)
 
-    def to_select(self)-> Select:
+    def to_select(self) -> Select:
+        """compile ctes into the select and return the select
+
+        Note: This destroys the structure of the query which cannot be undone
+        you may want to .copy() first
+        """
         for cte in self.ctes:
             table = Table(cte.name, cte.namespace)
             self.select.replace(table, cte)

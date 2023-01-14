@@ -22,111 +22,9 @@ from dj.sql.parsing.ast import (
     Table,
     TableExpression,
 )
+from dj.construction.exceptions import CompoundBuildException
+from dj.construction.utils import make_name, get_dj_node
 from dj.sql.parsing.backends.sqloxide import parse
-
-
-def make_name(namespace: Optional[Namespace], name="") -> str:
-    """utility taking a namespace and name to make a possible name of a DJ Node"""
-    ret = ""
-    if namespace:
-        ret += ".".join(name.name for name in namespace.names)
-    if name:
-        ret += ("." if ret else "") + name
-    return ret
-
-
-class CompoundBuildException:
-    """
-    Exception singleton to optionally build up exceptions or raise
-    """
-
-    errors: List[DJError]
-    _instance: Optional["CompoundBuildException"] = None
-    _raise: bool = True
-
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(CompoundBuildException, cls).__new__(
-                cls, *args, **kwargs
-            )
-            cls.errors = []
-        return cls._instance
-
-    def reset(self):
-        """
-        Resets the singleton
-        """
-        self._raise = True
-        self.errors = []
-
-    def clear(self):
-        """
-        Erases stored errors
-        """
-        self.errors = []
-
-    def set_raise(self, raise_: bool):
-        """
-        Set whether to raise caught exceptions or accumulate them
-        """
-        self._raise = raise_
-
-    def append(self, error: DJError, message: Optional[str]):
-        """
-        Accumulate DJ exceptions
-        """
-        if self._raise:
-            raise DJException(
-                message=message or error.message,
-                errors=[error],
-            )
-        self.errors.append(error)
-
-    def __str__(self) -> str:
-        plural = "s" if len(self.errors) > 1 else ""
-        error = f"Found {len(self.errors)} issue{plural}:\n"
-        return error + "\n\n".join(
-            "\t" + str(type(exc).__name__) + ": " + str(exc) + "\n" + "=" * 50
-            for exc in self.errors
-        )
-
-
-def get_dj_node(
-    session: Session,
-    node_name: str,
-    kinds: Optional[Iterable[NodeType]] = None,
-) -> Optional[Node]:
-    """Return the DJ Node with a given name from a set of node types"""
-    query = select(Node).filter(Node.name == node_name)
-    match = None
-    try:
-        match = session.exec(query).one()
-    except NoResultFound:
-        kind_msg = " or ".join(str(k) for k in kinds) if kinds else ""
-        CompoundBuildException().append(
-            error=DJError(
-                code=ErrorCode.UNKNOWN_NODE,
-                message=f"No node `{node_name}` exists of kind {kind_msg}.",
-            ),
-            message=f"Cannot get DJ node {node_name}",
-        )
-
-    if match and kinds and (match.type not in kinds):
-        CompoundBuildException().append(
-            error=DJError(
-                code=ErrorCode.NODE_TYPE_ERROR,
-                message=(
-                    f"Node `{match.name}` is of type `{str(match.type).upper()}`. "
-                    "Expected kind to be of {' or '.join(str(k) for k in kinds)}."
-                ),
-            ),
-            message=f"Cannot get DJ node {node_name}",
-        )
-
-    return match
-
-
-
 
 def _check_col(
     col: Column,
@@ -242,7 +140,7 @@ def _tables_to_namespaces(
         )
 
     namespaces[namespace] = {}
-    
+
     if isinstance(table, Alias):
         table: Union[Table, Select] = table.child  # type: ignore
 
@@ -302,9 +200,7 @@ def _validate_groupby_filters_ons_columns(
     # used to check need and capacity for merging in dimensions
     dimension_columns: Set[Node] = set()
 
-    gbfo: List[
-        Tuple[Column, bool]
-    ] = []
+    gbfo: List[Tuple[Column, bool]] = []
 
     if select.group_by:
         gbfo += [
@@ -312,31 +208,24 @@ def _validate_groupby_filters_ons_columns(
             for col in chain(*(exp.find_all(Column) for exp in select.group_by))
         ]
         if select.having:
-            gbfo += [
-                (col, True)
-                for col in select.having.find_all(Column)
-            ]
+            gbfo += [(col, True) for col in select.having.find_all(Column)]
     elif select.having:
         CompoundBuildException().append(
             DJError(
                 code=ErrorCode.INVALID_SQL_QUERY,
-                message="HAVING without a GROUP BY is not allowed. Did you want to use WHERE clause instead?",  # pylint: disable=C0301
+                message=("HAVING without a GROUP BY is not allowed. "
+                         "Did you want to use a WHERE clause instead?"),
                 context=str(select),
             ),
             message="Cannot extract dependencies from SELECT",
         )
 
     if select.where:
-        gbfo += [
-            (col, True)
-            for col in select.where.find_all(Column)
-        ]
+        gbfo += [(col, True) for col in select.where.find_all(Column)]
 
     if select.from_.joins:
         for join in select.from_.joins:
-            gbfo += [
-                (col, False) for col in join.on.find_all(Column)
-            ]
+            gbfo += [(col, False) for col in join.on.find_all(Column)]
 
     for col, dim_allowed in gbfo:
         bad_namespace = False
@@ -351,7 +240,7 @@ def _validate_groupby_filters_ons_columns(
             namespace = make_name(col.namespace)
             if not dim_allowed:
                 dim = None
-                try:
+                try: # see if the node is a dimension to inform an exception
                     dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 except DJException:  # pragma: no cover
                     pass
@@ -371,8 +260,9 @@ def _validate_groupby_filters_ons_columns(
                         ),
                         message="Cannot extract dependencies from SELECT",
                     )
-            else:
-
+            else:#dim allowed
+                if bad_namespace:
+                    CompoundBuildException().errors=CompoundBuildException().errors[:-1]
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if dim is not None:  # pragma: no cover
                     if col.name.name not in {c.name for c in dim.columns}:
@@ -388,7 +278,9 @@ def _validate_groupby_filters_ons_columns(
                             message="Cannot extract dependencies from SELECT",
                         )
                     else:
-                        dim_table = Table(col.namespace.names[0], Namespace(col.namespace.names[1:]))
+                        dim_table = Table(
+                            col.namespace.names[0], Namespace(col.namespace.names[1:])
+                        )
                         dim_table.add_dj_node(dim)
                         col.namespace = None
                         col.add_table(dim_table)
@@ -400,7 +292,7 @@ def _validate_groupby_filters_ons_columns(
 def compile_select(
     session: Session,
     select: Select,  # pylint: disable= W0621
-):
+) -> Select:
     """get all dj node dependencies from a sql select while validating"""
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
@@ -502,12 +394,25 @@ def compile_select(
 
     for subquery in subqueries:
         compile_select(session, subquery)
+    
+    return select
 
 
 def compile_query(
     session: Session,
     query: Query,
-):
+) -> Query:
     """get all dj node dependencies from a sql query while validating"""
-    compile_select(session, query.to_select())
-    
+    # query = query.copy()
+    select = query.to_select()
+    compile_select(session, select)
+    return query
+
+def compile_node(
+    session: Session,
+    node: Node,
+    dialect: Optional[str]=None
+) -> Query:
+    """get all dj node dependencies from a sql query while validating"""
+    query = parse(node.query, dialect)
+    return compile_query(query)
