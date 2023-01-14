@@ -30,7 +30,9 @@ def _(expression: ast.Column):
 
     # column was derived from some other expression we can get the type of
     if expression.expression:
-        return get_type_of_expression(expression.expression)
+        type_ = get_type_of_expression(expression.expression)
+        expression.add_type(type_)
+        return type_
 
     # column is from a table expression we can look through
     if table_pos_alias := expression.table:
