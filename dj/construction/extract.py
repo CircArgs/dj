@@ -2,7 +2,7 @@
 Functions for extracting DJ information from an AST
 """
 
-from typing import Optional, Set, Tuple, Dict, List
+from typing import Dict, List, Optional, Set, Tuple
 
 from sqlmodel import Session
 
@@ -11,6 +11,7 @@ from dj.errors import DJError, DJException, ErrorCode
 from dj.models.node import Node, NodeType
 from dj.sql.parsing import ast
 from dj.sql.parsing.backends.sqloxide import parse
+
 
 def extract_dependencies_from_query(
     session: Session,
@@ -25,19 +26,19 @@ def extract_dependencies_from_query(
     deps: Dict[Node, List[ast.Table]] = {}
     danglers: Dict[str, List[ast.Table]] = {}
     for table in query.find_all(ast.Table):
-        if node:=table.dj_node:
-            deps[node]=deps.get(node) or []
+        if node := table.dj_node:
+            deps[node] = deps.get(node) or []
             deps[node].append(table)
         else:
             name = make_name(table.namespace, table.name.name)
-            danglers[name]=danglers.get(name) or []
+            danglers[name] = danglers.get(name) or []
             danglers[name].append(table)
 
     for col in query.find_all(ast.Column):
         if isinstance(col.table, ast.Table):
             if node := col.table.dj_node:
                 if node.type == NodeType.DIMENSION:
-                    deps[node]=deps.get(node) or []
+                    deps[node] = deps.get(node) or []
                     deps[node].append(col.table)
 
     if CompoundBuildException().errors and raise_:
@@ -49,6 +50,7 @@ def extract_dependencies_from_query(
 
     return query, deps, danglers
 
+
 def extract_dependencies(
     session: Session,
     query: str,
@@ -57,6 +59,7 @@ def extract_dependencies(
 ) -> Tuple[ast.Query, Set[Node], Set[str]]:
     """Find all dependencies in the a string query"""
     return extract_dependencies_from_query(session, parse(query, dialect), raise_)
+
 
 def extract_dependencies_from_node(
     session: Session,

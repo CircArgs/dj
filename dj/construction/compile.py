@@ -2,13 +2,14 @@
 Functions for transforming an AST using DJ information
 """
 
-from dataclasses import dataclass, field
 from itertools import chain
-from typing import Dict, Generator, Iterable, List, Optional, Set, Tuple, Union, cast
+from typing import Dict, List, Optional, Set, Tuple, Union, cast
 
 from sqlalchemy.orm.exc import NoResultFound
 from sqlmodel import Session, select
 
+from dj.construction.exceptions import CompoundBuildException
+from dj.construction.utils import get_dj_node, make_name
 from dj.errors import DJError, DJException, ErrorCode
 from dj.models.node import Node, NodeType
 from dj.sql.parsing.ast import (
@@ -22,9 +23,8 @@ from dj.sql.parsing.ast import (
     Table,
     TableExpression,
 )
-from dj.construction.exceptions import CompoundBuildException
-from dj.construction.utils import make_name, get_dj_node
 from dj.sql.parsing.backends.sqloxide import parse
+
 
 def _check_col(
     col: Column,
@@ -213,8 +213,10 @@ def _validate_groupby_filters_ons_columns(
         CompoundBuildException().append(
             DJError(
                 code=ErrorCode.INVALID_SQL_QUERY,
-                message=("HAVING without a GROUP BY is not allowed. "
-                         "Did you want to use a WHERE clause instead?"),
+                message=(
+                    "HAVING without a GROUP BY is not allowed. "
+                    "Did you want to use a WHERE clause instead?"
+                ),
                 context=str(select),
             ),
             message="Cannot extract dependencies from SELECT",
@@ -240,7 +242,7 @@ def _validate_groupby_filters_ons_columns(
             namespace = make_name(col.namespace)
             if not dim_allowed:
                 dim = None
-                try: # see if the node is a dimension to inform an exception
+                try:  # see if the node is a dimension to inform an exception
                     dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 except DJException:  # pragma: no cover
                     pass
@@ -260,9 +262,11 @@ def _validate_groupby_filters_ons_columns(
                         ),
                         message="Cannot extract dependencies from SELECT",
                     )
-            else:#dim allowed
+            else:  # dim allowed
                 if bad_namespace:
-                    CompoundBuildException().errors=CompoundBuildException().errors[:-1]
+                    CompoundBuildException().errors = CompoundBuildException().errors[
+                        :-1
+                    ]
                 dim = get_dj_node(session, namespace, {NodeType.DIMENSION})
                 if dim is not None:  # pragma: no cover
                     if col.name.name not in {c.name for c in dim.columns}:
@@ -279,7 +283,8 @@ def _validate_groupby_filters_ons_columns(
                         )
                     else:
                         dim_table = Table(
-                            col.namespace.names[0], Namespace(col.namespace.names[1:])
+                            col.namespace.names[0],
+                            Namespace(col.namespace.names[1:]),
                         )
                         dim_table.add_dj_node(dim)
                         col.namespace = None
@@ -394,7 +399,7 @@ def compile_select(
 
     for subquery in subqueries:
         compile_select(session, subquery)
-    
+
     return select
 
 
@@ -408,11 +413,8 @@ def compile_query(
     compile_select(session, select)
     return query
 
-def compile_node(
-    session: Session,
-    node: Node,
-    dialect: Optional[str]=None
-) -> Query:
+
+def compile_node(session: Session, node: Node, dialect: Optional[str] = None) -> Query:
     """get all dj node dependencies from a sql query while validating"""
     query = parse(node.query, dialect)
-    return compile_query(query)
+    return compile_query(session, query)

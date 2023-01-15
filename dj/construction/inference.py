@@ -35,11 +35,11 @@ def _(expression: ast.Column):
         return type_
 
     # column is from a table expression we can look through
-    if table_pos_alias := expression.table:
-        if isinstance(table, ast.Alias):
-            table = table_pos_alias.child
+    if table_or_alias := expression.table:
+        if isinstance(table_or_alias, ast.Alias):
+            table = table_or_alias.child
         else:
-            table = table_pos_alias
+            table = table_or_alias
         if isinstance(table, ast.Table):
             if table.dj_node:
                 for col in table.dj_node.columns:
@@ -49,13 +49,13 @@ def _(expression: ast.Column):
             else:
                 raise DJParseException(
                     f"Cannot resolve type of column {expression}. "
-                    "column's table does not have a DJ Node."
+                    "column's table does not have a DJ Node.",
                 )
         else:
             raise DJParseException(
                 f"Cannot resolve type of column {expression}. "
                 "DJ does not currently traverse subqueries for type information. "
-                "Consider extraction first."
+                "Consider extraction first.",
             )
         # else:#if subquery
         # currently don't even bother checking subqueries.

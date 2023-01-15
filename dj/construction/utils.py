@@ -2,15 +2,15 @@
 Utilities used around construction
 """
 
-from typing import Iterable, Optional
+from typing import Optional, Set
 
 from sqlalchemy.orm.exc import NoResultFound
 from sqlmodel import Session, select
 
+from dj.construction.exceptions import CompoundBuildException
 from dj.errors import DJError, DJException, ErrorCode
 from dj.models.node import Node, NodeType
 from dj.sql.parsing.ast import Namespace
-from dj.construction.exceptions import CompoundBuildException
 
 
 def make_name(namespace: Optional[Namespace], name="") -> str:
@@ -22,10 +22,11 @@ def make_name(namespace: Optional[Namespace], name="") -> str:
         ret += ("." if ret else "") + name
     return ret
 
+
 def get_dj_node(
     session: Session,
     node_name: str,
-    kinds: Optional[Iterable[NodeType]] = None,
+    kinds: Optional[Set[NodeType]] = None,
 ) -> Optional[Node]:
     """Return the DJ Node with a given name from a set of node types"""
     query = select(Node).filter(Node.name == node_name)
@@ -48,12 +49,10 @@ def get_dj_node(
                 code=ErrorCode.NODE_TYPE_ERROR,
                 message=(
                     f"Node `{match.name}` is of type `{str(match.type).upper()}`. "
-                    "Expected kind to be of {' or '.join(str(k) for k in kinds)}."
+                    f"Expected kind to be of {' or '.join(str(k) for k in kinds)}."
                 ),
             ),
             message=f"Cannot get DJ node {node_name}",
         )
 
     return match
-
-
