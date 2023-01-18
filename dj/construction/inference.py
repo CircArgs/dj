@@ -44,7 +44,7 @@ def _(expression: ast.Column):
             if table.dj_node:
                 for col in table.dj_node.columns:
                     if col.name == expression.name.name:
-                        expression.set_type(col.type)
+                        expression.add_type(col.type)
                         return col.type
             else:
                 raise DJParseException(

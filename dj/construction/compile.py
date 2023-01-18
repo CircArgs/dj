@@ -72,7 +72,7 @@ def _check_col(
         return None
 
     if namespace:  # there is a proposed namespace that has the column
-        col.add_table(table_nodes[namespace].alias_or_self())
+        col.add_table(cast(TableExpression, table_nodes[namespace].alias_or_self()))
         col_exp = namespaces[namespace][col.name.name]
         if isinstance(col_exp, Expression):
             col.add_expression(col_exp)
@@ -82,7 +82,7 @@ def _check_col(
         for nmpsc, nmspc_cols in namespaces.items():  # pragma: no cover
 
             if col.name.name in nmspc_cols:
-                col.add_table(table_nodes[nmpsc].alias_or_self())
+                col.add_table(cast(TableExpression, table_nodes[nmpsc].alias_or_self()))
 
                 col_exp = namespaces[nmpsc][col.name.name]
                 if isinstance(col_exp, Expression):
@@ -283,8 +283,8 @@ def _validate_groupby_filters_ons_columns(
                         )
                     else:
                         dim_table = Table(
-                            col.namespace.names[0],
-                            Namespace(col.namespace.names[1:]),
+                            col.namespace.names[0], # type: ignore
+                            Namespace(col.namespace.names[1:]), #type: ignore
                         )
                         dim_table.add_dj_node(dim)
                         col.namespace = None
@@ -416,5 +416,7 @@ def compile_query(
 
 def compile_node(session: Session, node: Node, dialect: Optional[str] = None) -> Query:
     """get all dj node dependencies from a sql query while validating"""
+    if node.query is None:
+        raise Exception(f"Cannot compile a node `{node.name}`with no query.")
     query = parse(node.query, dialect)
     return compile_query(session, query)

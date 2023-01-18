@@ -1,18 +1,18 @@
 """
 tools for planning the steps a node will need to take to be built to run
 """
-from dj.construction.extract import extract_dependencies
-from dj.sql.parsing import ast
-from dj.models.node import Node, NodeType
-from dj.models.database import Database
-from dj.sql.dag import get_cheapest_online_database
-from typing import Set, List, Dict, Optional, Tuple
 from functools import reduce
+from typing import Dict, List, Optional, Set, Tuple
 
 from sqlmodel import Session
 
+from dj.construction.extract import extract_dependencies_from_node
+from dj.models.database import Database
+from dj.models.node import Node, NodeType
+from dj.sql.dag import get_cheapest_online_database
+from dj.sql.parsing import ast
 
-BuildPlan = Tuple[ast.Query, Dict[Node, Tuple[Set[Database], "BuildPlan"]]]
+BuildPlan = Tuple[ast.Query, Dict[Node, Tuple[Set[Database], "BuildPlan"]]]#type: ignore
 
 
 def get_node_materialized_databases(
@@ -31,7 +31,9 @@ def get_node_materialized_databases(
 
 
 def generate_build_plan(
-    session: Session, node: Node, dialect: Optional[str] = None
+    session: Session,
+    node: Node,
+    dialect: Optional[str] = None,
 ) -> BuildPlan:
     """
     creates a build plan to be followed by the building of a node
@@ -42,8 +44,11 @@ def generate_build_plan(
         that can be recursively followed as deep as desired to
         replace nodes with the desired ast
     """
-
-    tree, deps, _ = extract_dependencies(session, node.query, dialect)
+    if node.query is None:
+        raise Exception(
+            "Node has no query. Cannot generate a build plan without a query.",
+        )
+    tree, deps, _ = extract_dependencies_from_node(session, node, dialect)
     databases = {}
     for node, tables in deps.items():
         columns = {col.name.name for table in tables for col in table.columns}
@@ -51,7 +56,7 @@ def generate_build_plan(
         node_mat_dbs = get_node_materialized_databases(node, columns)
         build_plan = None
         if node.type != NodeType.SOURCE:
-            build_plan = generate_build_plan(node, dialect)
+            build_plan = generate_build_plan(session, node, dialect)
         databases[node] = (node_mat_dbs, build_plan)
 
     return tree, databases
@@ -59,21 +64,20 @@ def generate_build_plan(
 
 def _level_database(bp: BuildPlan, levels: List[List[Set[Database]]], level: int = 0):
     """
-    takes a build plan and compounds each depth into a levels
+    takes a build plan and compounds each depth into levels
     """
     if levels is None:
         levels = []
-    tree, sbp = bp
-    nodes = set((node for node, _ in sbp.items()))
-    dbi = reduce(lambda a, b: a & b, (dbs for _, (dbs, _) in sbp.items()))
+    sub_build_plan = bp[1]
+    dbi = reduce(lambda a, b: a & b, (dbs for _, (dbs, _) in sub_build_plan.items()))
 
     while level >= len(levels):
         levels.append([])
     levels[level].append(dbi)
 
-    for _, (_, ssbp) in sbp.items():
-        if ssbp:
-            level_database(ssbp, levels, level + 1)
+    for _, (_, sub_sub_build_plan) in sub_build_plan.items():
+        if sub_sub_build_plan:
+            _level_database(sub_sub_build_plan, levels, level + 1)
 
 
 async def optimize_level_by_cost(bp: BuildPlan) -> Tuple[int, Database]:
@@ -81,21 +85,20 @@ async def optimize_level_by_cost(bp: BuildPlan) -> Tuple[int, Database]:
     from a build plan, determine how deep to follow the build plan
     by choosing the lowest cost database
     """
-    levels = []
+    levels:List[List[Set[Database]]] = []
     _level_database(bp, levels)
     some_db = False
     cheapest_levels = []
     for level in levels:
         try:
             cheapest_levels.append(
-                await get_cheapest_online_database(
-                    reduce(lambda a, b: a & b, level)
-                    )
+                await get_cheapest_online_database(reduce(lambda a, b: a & b, level)),
             )
             some_db = True
         except Exception as exc:
             if "No active database found" in str(exc):
-                cheapest_levels.append(None)
+                #maintain levels
+                cheapest_levels.append(None)#type: ignore
             else:
                 raise exc
 
@@ -109,20 +112,21 @@ async def optimize_level_by_cost(bp: BuildPlan) -> Tuple[int, Database]:
 
 
 async def optimize_level_by_database_id(
-    bp: BuildPlan, database_id: int
+    bp: BuildPlan,
+    database_id: int,
 ) -> Tuple[int, Database]:
     """
     from a build plan, determine how deep to follow the build plan
     by selecting the first level that can run completely in that database
     """
-    levels = []
+
+    levels:List[List[Set[Database]]] = []
     _level_database(bp, levels)
-    some_db = False
     combined_levels = [reduce(lambda a, b: a & b, level) for level in levels]
     for i, level in enumerate(combined_levels):
         for database in level:
             if database.id == database_id and await database.do_ping():
                 return i, database
     raise Exception(
-        f"The requested database with id {database_id} cannot run this query."
+        f"The requested database with id {database_id} cannot run this query.",
     )

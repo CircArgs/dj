@@ -2,7 +2,7 @@
 Functions for extracting DJ information from an AST
 """
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlmodel import Session
 
@@ -17,7 +17,7 @@ def extract_dependencies_from_query(
     session: Session,
     query: ast.Query,
     raise_: bool = True,
-) -> Tuple[ast.Query, Set[Node], Set[str]]:
+) -> Tuple[ast.Query, Dict[Node, List[ast.Table]], Dict[str, List[ast.Table]]]:
     """Find all dependencies in a compiled query"""
     CompoundBuildException().reset()
     CompoundBuildException().set_raise(False)
@@ -27,18 +27,18 @@ def extract_dependencies_from_query(
     danglers: Dict[str, List[ast.Table]] = {}
     for table in query.find_all(ast.Table):
         if node := table.dj_node:
-            deps[node] = deps.get(node) or []
+            deps[node] = deps.get(node, [])
             deps[node].append(table)
         else:
             name = make_name(table.namespace, table.name.name)
-            danglers[name] = danglers.get(name) or []
+            danglers[name] = danglers.get(name, [])
             danglers[name].append(table)
 
     for col in query.find_all(ast.Column):
         if isinstance(col.table, ast.Table):
             if node := col.table.dj_node:
                 if node.type == NodeType.DIMENSION:
-                    deps[node] = deps.get(node) or []
+                    deps[node] = deps.get(node, [])
                     deps[node].append(col.table)
 
     if CompoundBuildException().errors and raise_:
@@ -56,7 +56,7 @@ def extract_dependencies(
     query: str,
     dialect: Optional[str] = None,
     raise_: bool = True,
-) -> Tuple[ast.Query, Set[Node], Set[str]]:
+) -> Tuple[ast.Query, Dict[Node, List[ast.Table]], Dict[str, List[ast.Table]]]:
     """Find all dependencies in the a string query"""
     return extract_dependencies_from_query(session, parse(query, dialect), raise_)
 
@@ -66,5 +66,8 @@ def extract_dependencies_from_node(
     node: Node,
     dialect: Optional[str] = None,
     raise_: bool = True,
-) -> Tuple[ast.Query, Set[Node], Set[str]]:
+) -> Tuple[ast.Query, Dict[Node, List[ast.Table]], Dict[str, List[ast.Table]]]:
+    """Find all immediate dependencies of a Node"""
+    if node.query is None:
+        raise Exception("Node has no query to extract from.")
     return extract_dependencies(session, node.query, dialect, raise_)

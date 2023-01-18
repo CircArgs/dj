@@ -46,14 +46,14 @@ LOOKUP_CHARS = {
 
 def amenable_name(name: str) -> str:
     """Takes a string and makes it have only alphanumerics"""
-    ret = []
-    cont = []
-    for c in name:
-        if c in ACCEPTABLE_CHARS:
-            cont.append(c)
-        elif c in LOOKUP_CHARS:
+    ret: List[str] = []
+    cont: List[str] = []
+    for char in name:
+        if char in ACCEPTABLE_CHARS:
+            cont.append(char)
+        elif char in LOOKUP_CHARS:
             ret.append("".join(cont))
-            ret.append(LOOKUP_CHARS[c])
+            ret.append(LOOKUP_CHARS[char])
             cont = []
         else:
             ret.append("".join(cont))
@@ -81,29 +81,39 @@ def build_select(
 
     for table in select.find_all(ast.Table):
         if node := table.dj_node:
-            tables[node] = tables.get(node) or []
+            tables[node] = tables.get(node, [])
             tables[node].append(table)
 
     for col in select.find_all(ast.Column):
         if isinstance(col.table, ast.Table):
             if node := col.table.dj_node:
                 if node.type == NodeType.DIMENSION:
-                    dimension_columns[node] = dimension_columns.get(node) or []
+                    dimension_columns[node] = dimension_columns.get(node, [])
                     dimension_columns[node].append(col)
 
     for dim_node, dim_cols in dimension_columns.items():
         if dim_node not in tables:  # need to join dimension
+            join_info: Dict[Node, List[Column]] = {}
+            for table_node in tables:
+                join_dim_cols = []
+                for col in table_node.columns:
+                    if col.dimension == dim_node:
+                        if col.dimension_column is None and not any(
+                            dim_col.name == "id" for dim_col in dim_node.columns
+                        ):
+                            raise Exception(
+                                f"Node {table_node.name} specifiying dimension {dim_node.name}"
+                                f" on column {col.name} does not specify a dimension column, "
+                                f"but {dim_node.name} does not have the default key `id`.",
+                            )
+                        join_dim_cols.append(col)
+
+                join_info[table_node] = join_dim_cols
             if build_plan_depth > 0:  # continue following build plan
                 alias = amenable_name(dim_node.name)
-                join_info: Dict[str, Tuple[Node, List[Column]]] = {}
-                for table_node in tables:
-                    join_dim_cols = [
-                        col for col in table_node.columns if col.dimension == dim_node
-                    ]
-                    join_info[table_node] = join_dim_cols
 
                 _, dim_build_plan = build_plan_lkp[dim_node]
-                dim_ast, _ = dim_build_plan
+                dim_ast = dim_build_plan[0]
                 dim_query: ast.Query = build_query(
                     session,
                     dim_ast,
@@ -132,43 +142,46 @@ def build_select(
                     ),
                 )
 
-            for dim_col in dim_cols:
+            for (
+                dim_col
+            ) in dim_cols:  # replace column table references to this dimension
                 dim_col.add_table(dim_ast)
-
-            joins: List[ast.Join] = []
 
             for table_node, cols in join_info.items():
                 ast_tables = tables[table_node]
+                on = []
                 for table in ast_tables:
-                    on = []
                     for col in cols:
                         on.append(
                             ast.BinaryOp(
                                 ast.BinaryOpKind.Eq,
                                 ast.Column(ast.Name(col.name), _table=table),
                                 ast.Column(
-                                    ast.Name(col.dimension_column),
+                                    ast.Name(col.dimension_column or "id"),
                                     _table=dim_ast,
                                 ),
                             ),
                         )
-                joins.append(
+                select.from_.joins.append(
                     ast.Join(
                         ast.JoinKind.LeftOuter,
                         dim_ast,
                         reduce(
-                            lambda l, r: ast.BinaryOp(ast.BinaryOpKind.And, l, r),
+                            lambda left, right: ast.BinaryOp(
+                                ast.BinaryOpKind.And,
+                                left,
+                                right,
+                            ),
                             on,
                         ),
                     ),
                 )
 
-            select.from_.joins += joins
     for node, tbls in tables.items():
 
         if build_plan_depth > 0:  # continue following build plan
             _, node_build_plan = build_plan_lkp[node]
-            node_ast, _ = node_build_plan
+            node_ast = node_build_plan[0]
             node_query = build_query(
                 session,
                 node_ast,
@@ -228,7 +241,7 @@ async def build_node(
     node: Node,
     dialect: Optional[str] = None,
     database_id: Optional[int] = None,
-) -> ast.Query:
+) -> Tuple[ast.Query, Database]:
     """transforms a query ast by replacing dj node references with their asts"""
     build_plan = generate_build_plan(session, node, dialect)
     if database_id is not None:
