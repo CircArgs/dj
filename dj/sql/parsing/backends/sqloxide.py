@@ -23,6 +23,8 @@ from dj.sql.parsing.ast import (
     Namespace,
     Number,
     Operation,
+    Over,
+    Order,
     Query,
     Select,
     String,
@@ -34,6 +36,7 @@ from dj.sql.parsing.ast import (
     Wildcard,
 )
 from dj.sql.parsing.backends.exceptions import DJParseException
+from dj.sql.parsing.backends.raw_processing import process_raw
 
 
 def match_keys(parse_tree: dict, *keys: Set[str]) -> bool:
@@ -112,6 +115,7 @@ def parse_expression(  # pylint: disable=R0911,R0912
             return parse_value(parse_tree["Value"])
         if match_keys(parse_tree, {"Wildcard"}):
             return parse_expression("Wildcard")
+
         if match_keys(parse_tree, {"Nested"}):
             return parse_expression(parse_tree["Nested"])
         if match_keys(parse_tree, {"UnaryOp"}, {"BinaryOp"}, {"Between"}):
@@ -226,15 +230,52 @@ def parse_table(parse_tree: dict) -> TableExpression:
     raise DJParseException("Failed to parse Table")  # pragma: no cover
 
 
+# def parse_over(parse_tree: dict)-> Over:
+#     """parse the over of a function"""
+#     if match_keys(parse_tree, {'partition_by', 'order_by', 'window_frame'}):
+#         if parse_tree['window_frame'] is not None:
+#             raise DJParseException("window frames are not supported.")
+#         partition_by = [parse_expression(exp) for exp in parse_tree['partition_by']]
+#         order_by = [parse_order(exp) for exp in parse_tree['order_by']]
+#         return Over(partition_by, order_by)
+#     raise DJParseException("Failed to parse OVER")  # pragma: no cover
+
+
+def parse_over(parse_tree: dict) -> Over:
+    """parse the over of a function"""
+    if match_keys(parse_tree, {"partition_by", "order_by", "window_frame"}):
+        if parse_tree["window_frame"] is not None:
+            raise DJParseException("window frames are not supported.")
+        partition_by = [parse_expression(exp) for exp in parse_tree["partition_by"]]
+        order_by = [parse_order(exp) for exp in parse_tree["order_by"]]
+        return Over(partition_by, order_by)
+    raise DJParseException("Failed to parse OVER")  # pragma: no cover
+
+
+def parse_order(parse_tree: dict) -> Order:
+    """parse the order parts of an order by or window function"""
+    if match_keys(parse_tree, {"expr", "asc", "nulls_first"}):
+        if parse_tree["nulls_first"] is not None:
+            raise DJParseException("nulls first is not supported.")
+        return Order(
+            expr=parse_expression(parse_tree["expr"]),
+            asc=True if parse_tree["asc"] else False,
+        )
+    raise DJParseException("Failed to parse ORDER BY expression.")  # pragma: no cover
+
+
 def parse_function(parse_tree: dict) -> Function:
     """parse a function operating on an expression"""
-    if match_keys_subset(parse_tree, {"name", "args"}):
+    if match_keys_subset(parse_tree, {"name", "args", "over", "distinct"}):
         args = parse_tree["args"]
         names = parse_tree["name"]
         namespace, name = parse_namespace(names).pop_self()
+
         return Function(
             name,
             args=[parse_expression(exp) for exp in args],
+            distinct=parse_tree["distinct"],
+            over=parse_over(parse_tree["over"]),
         ).add_namespace(namespace)
     raise DJParseException("Failed to parse Function")  # pragma: no cover
 
@@ -327,9 +368,10 @@ def parse_query(parse_tree: dict) -> Query:
             select.limit = None
             if parse_tree["limit"] is not None:
                 limit_value = parse_value(parse_tree["limit"])
-                if not isinstance(limit_value, Number):
-                    raise DJParseException("limit must be a number")  # pragma: no cover
-                select.limit = limit_value
+                select.limit = limit_value  # type: ignore
+            if parse_tree["order_by"] is not None:
+                order_by = [parse_order(exp) for exp in parse_tree["order_by"]]
+                select.order_by = order_by
             return Query(
                 ctes=parse_ctes(parse_tree["with"])
                 if parse_tree["with"] is not None
@@ -358,7 +400,14 @@ def parse(sql: str, dialect: Optional[str] = None) -> Query:
     """
     if dialect is None:
         dialect = "ansi"
+    sql, raws = process_raw(sql, dialect)
     oxide_parsed = parse_sql(sql, dialect)
     if len(oxide_parsed) != 1:
         raise DJParseException("Expected a single sql statement.")
-    return parse_oxide_tree(oxide_parsed[0])
+    ast = parse_oxide_tree(oxide_parsed[0])
+    for raw in raws:
+        for col in ast.filter(
+            lambda node: isinstance(node, Column) and node.name.name == raw.name
+        ):
+            ast.replace(col, raw)
+    return ast

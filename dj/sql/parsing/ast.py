@@ -19,10 +19,12 @@ from typing import (
     Union,
 )
 
+from sqlalchemy.sql import expression
+
 from dj.models.node import Node as DJNode
 from dj.models.node import NodeType as DJNodeType
 from dj.sql.parsing.backends.exceptions import DJParseException
-from dj.typing import ColumnType
+from dj.typing import ColumnType, ExpressionWithAlias, Identifier
 
 PRIMITIVES = {int, float, str, bool, type(None)}
 
@@ -185,6 +187,53 @@ class Node(ABC):
             )  # pylint: disable=C0301
 
         return child_generator
+
+    def to_dict(self) -> dict:
+        """serialize to a dictionary"""
+        seen: Set[
+            int
+        ] = (
+            set()
+        )  # to avoid infinite recursion from cycles ex. column->table->column...
+
+        def _to_dict(  # pylint: disable=too-many-branches,invalid-name
+            self: Node,
+        ) -> Any:
+            if id(self) in seen:
+                return
+            seen.add(id(self))
+            type_name = self.__class__.__name__
+            ret = {type_name: {}}
+            for name, child in self.fields(
+                flat=False,
+                nodes_only=False,
+                obfuscated=True,
+                nones=False,
+                named=True,
+            ):
+                iterable_type = [
+                    iterable_type
+                    for iterable_type in (list, tuple, set)
+                    if isinstance(child, iterable_type)
+                ]
+                if iterable_type:
+                    new = []
+                    for element in child:
+                        # recurse to other nodes in the iterable
+                        if isinstance(element, Node):  # pragma: no cover
+                            new.append(_to_dict(element))
+                        else:
+                            new.append(element)
+                    new = iterable_type[0](new)  # type: ignore
+                    ret[type_name][name] = new
+                elif isinstance(child, Node):
+                    ret[type_name][name] = _to_dict(child)
+                else:
+                    ret[type_name][name] = child
+
+            return ret
+
+        return _to_dict(self)
 
     @property
     def children(self) -> Iterator["Node"]:
@@ -532,13 +581,68 @@ class Case(Expression):
 
 
 @dataclass(eq=False)
+class In(Expression):
+    """an in expression"""
+
+    expr: Expression
+    source: Union[List[Expression], "Select"]
+    negated: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        if isinstance(self.source, Select) and len(self.source.projection) > 1:
+            raise DJParseException("In subquery cannot have more than a single column.")
+
+    def __str__(self) -> str:
+        not_ = "NOT " if self.negated else ""
+        return f"{self.expr} {not_}IN {self.source}"
+
+
+@dataclass(eq=False)
+class Over(Expression):
+    """represents a function used in a statement"""
+
+    partition_by: List[Expression] = field(default_factory=list)
+    order_by: List["Order"] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not (self.partition_by or self.order_by):
+            raise DJParseException(
+                "An OVER requires at least a PARTITION BY or ORDER BY"
+            )
+
+    def __str__(self) -> str:
+        partition_by = (
+            " PARTITION BY " + ", ".join(str(exp) for exp in self.partition_by)
+            if self.partition_by
+            else ""
+        )
+        order_by = (
+            " ORDER BY " + ", ".join(str(exp) for exp in self.order_by)
+            if self.order_by
+            else ""
+        )
+        consolidated_by = "\n".join(
+            po_by for po_by in (partition_by, order_by) if po_by
+        )
+        return f"OVER ({consolidated_by})"
+
+
+@dataclass(eq=False)
 class Function(Named, Operation):
     """represents a function used in a statement"""
 
     args: List[Expression] = field(default_factory=list)
+    distinct: bool = False
+    over: Optional[Over] = None
 
     def __str__(self) -> str:
-        return f"{self.name}({', '.join(str(arg) for arg in self.args)})"
+        distinct = "DISTINCT " if self.distinct else ""
+        over = f" {self.over}" if self.over else ""
+        return (
+            f"{self.name}({distinct}{', '.join(str(arg) for arg in self.args)}){over}"
+        )
 
 
 @dataclass(eq=False)
@@ -668,6 +772,30 @@ class Column(Named):
 
 
 @dataclass(eq=False)
+class Raw(Expression):
+    """a raw expression"""
+
+    name: Optional[str] = None
+    expr_string: Optional[str] = None
+    type: Optional[ColumnType] = None
+    expressions: List[Expression] = field(default_factory=list)
+    expression_hashes: List[int] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.name is None or self.expr_string is None or self.type is None:
+            raise DJParseException("Raw requires a name, string and type")
+
+    def __str__(self) -> str:
+        return self.expr_string.format_map(
+            {
+                expr_hash: str(expr)
+                for expr_hash, expr in zip(self.expression_hashes, self.expressions)
+            }
+        )  # type:ignore
+
+
+@dataclass(eq=False)
 class Wildcard(Expression):
     """wildcard or '*' expression"""
 
@@ -778,6 +906,18 @@ class From(Node):
 
 
 @dataclass(eq=False)
+class Order(Node):
+    """a column wrapper for ordering"""
+
+    expr: Expression
+    asc: bool = True
+
+    def __str__(self) -> str:
+        order = "ASC" if self.asc else "DESC"
+        return f"{self.expr} {order}"
+
+
+@dataclass(eq=False)
 class Select(Expression):
     """a single select statement type"""
 
@@ -788,6 +928,14 @@ class Select(Expression):
     where: Optional[Expression] = None
     limit: Optional[Number] = None
     distinct: bool = False
+    order_by: List[Order] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not isinstance(self.parent, Query) and self.order_by:
+            raise DJParseException("Cannot use ORDER BY on a subquerql .")
+        if self.limit and not isinstance(self.limit, Number):
+            raise DJParseException("Limit must be a number.")
 
     def __str__(self) -> str:
         subselect = not (isinstance(self.parent, Query) or self.parent is None)
@@ -804,6 +952,8 @@ class Select(Expression):
             parts.extend(("HAVING ", str(self.having), "\n"))
         if self.limit is not None:
             parts.extend(("LIMIT ", str(self.limit), "\n"))
+        if self.order_by:
+            parts.extend(("ORDER BY ", ", ".join(str(exp) for exp in self.order_by)))
         select = " ".join(parts)
         if subselect:
             return "(" + select + ")"
