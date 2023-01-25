@@ -99,10 +99,20 @@ def _(expression: ast.Function):  # pragma: no cover
 def _(expression: ast.IsNull):
     return ColumnType.BOOL
 
+
 @get_type_of_expression.register
 def _(expression: ast.In):
     return ColumnType.BOOL
 
+
+@get_type_of_expression.register
+def _(expression: ast.Between):
+    expr_type =  get_type_of_expression(expression.expr)
+    low_type = get_type_of_expression(expression.low)
+    high_type = get_type_of_expression(expression.high)
+    if expr_type==low_type==high_type:
+        return ColumnType.BOOL
+    raise DJParseException(f"BETWEEN expects all elements to have the same type got {expr_type} BETWEEN {low_type} AND {high_type} in {expression}.")
 
 @get_type_of_expression.register
 def _(expression: ast.UnaryOp):
@@ -112,7 +122,7 @@ def _(expression: ast.UnaryOp):
     def raise_unop_exception():
         raise DJParseException(
             "Incompatible type in unary operation "
-            f"{expression}. Got {type}.",
+            f"{expression}. Got {type} in {expression}.",
         )
 
     return {
