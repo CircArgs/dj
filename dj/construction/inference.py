@@ -99,6 +99,27 @@ def _(expression: ast.Function):  # pragma: no cover
 def _(expression: ast.IsNull):
     return ColumnType.BOOL
 
+@get_type_of_expression.register
+def _(expression: ast.In):
+    return ColumnType.BOOL
+
+
+@get_type_of_expression.register
+def _(expression: ast.UnaryOp):
+    kind = expression.op
+    type = get_type_of_expression(expression.expr)
+
+    def raise_unop_exception():
+        raise DJParseException(
+            "Incompatible type in unary operation "
+            f"{expression}. Got {type}.",
+        )
+
+    return {
+        ast.UnaryOpKind.Not: lambda type: ColumnType.BOOL,
+        ast.UnaryOpKind.Minus: lambda type: type if type in (ColumnType.INT, ColumnType.FLOAT) else raise_unop_exception(),
+        ast.UnaryOpKind.Plus: lambda type: type if type in (ColumnType.INT, ColumnType.FLOAT) else raise_unop_exception(),
+    }[kind](type)
 
 @get_type_of_expression.register
 def _(expression: ast.BinaryOp):

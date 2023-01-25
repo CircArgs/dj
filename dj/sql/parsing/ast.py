@@ -591,7 +591,7 @@ class In(Expression):
     def __post_init__(self):
         super().__post_init__()
         if isinstance(self.source, Select) and len(self.source.projection) > 1:
-            raise DJParseException("In subquery cannot have more than a single column.")
+            raise DJParseException("IN subquery cannot have more than a single column.")
 
     def __str__(self) -> str:
         not_ = "NOT " if self.negated else ""

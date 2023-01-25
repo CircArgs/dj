@@ -16,6 +16,7 @@ from dj.sql.parsing.ast import (
     Expression,
     From,
     Function,
+    In,
     IsNull,
     Join,
     JoinKind,
@@ -39,16 +40,20 @@ from dj.sql.parsing.backends.exceptions import DJParseException
 from dj.sql.parsing.backends.raw_processing import process_raw
 
 
-def match_keys(parse_tree: dict, *keys: Set[str]) -> bool:
+def match_keys(parse_tree: dict, *keys: Set[str]) -> Optional[Set[str]]:
     """match a parse tree having exact keys"""
-    return set(parse_tree.keys()) in keys
+    tree_keys = set(parse_tree.keys())
+    for key in keys:
+        if key==tree_keys:
+            return key
 
 
-def match_keys_subset(parse_tree: dict, *keys: Set[str]) -> bool:
+def match_keys_subset(parse_tree: dict, *keys: Set[str]) -> Optional[Set[str]]:
     """match a parse tree having a subset of keys"""
     tree_keys = set(parse_tree.keys())
-    return any(key <= tree_keys for key in keys)  # pragma: no cover
-
+    for key in keys:
+        if key<=tree_keys:
+            return key
 
 def parse_op(parse_tree: dict) -> Operation:
     """parse an unary or binary operation"""
@@ -115,7 +120,8 @@ def parse_expression(  # pylint: disable=R0911,R0912
             return parse_value(parse_tree["Value"])
         if match_keys(parse_tree, {"Wildcard"}):
             return parse_expression("Wildcard")
-
+        if match:=match_keys(parse_tree, {"InList"}, {'InSubquery'}):
+            return parse_in(parse_tree[match.pop()])
         if match_keys(parse_tree, {"Nested"}):
             return parse_expression(parse_tree["Nested"])
         if match_keys(parse_tree, {"UnaryOp"}, {"BinaryOp"}, {"Between"}):
@@ -230,15 +236,18 @@ def parse_table(parse_tree: dict) -> TableExpression:
     raise DJParseException("Failed to parse Table")  # pragma: no cover
 
 
-# def parse_over(parse_tree: dict)-> Over:
-#     """parse the over of a function"""
-#     if match_keys(parse_tree, {'partition_by', 'order_by', 'window_frame'}):
-#         if parse_tree['window_frame'] is not None:
-#             raise DJParseException("window frames are not supported.")
-#         partition_by = [parse_expression(exp) for exp in parse_tree['partition_by']]
-#         order_by = [parse_order(exp) for exp in parse_tree['order_by']]
-#         return Over(partition_by, order_by)
-#     raise DJParseException("Failed to parse OVER")  # pragma: no cover
+def parse_in(parse_tree: dict)-> In:
+    """parse an in statement"""
+    if match_keys(parse_tree, {'expr', 'list', 'negated'}):
+        source = [parse_expression(expr) for expr in parse_tree['list']]
+        return In(parse_expression(parse_tree['expr']), source, parse_tree['negated'])
+    if match_keys(parse_tree, {'expr', 'subquery', 'negated'}):
+        subquery = parse_tree['subquery']
+        if subquery['with']:
+              raise DJParseException("CTES not allowed in subquery.")
+        source = parse_query(subquery).select
+        return In(parse_expression(parse_tree['expr']), source, parse_tree['negated'])
+    raise DJParseException("Failed to parse IN")  # pragma: no cover
 
 
 def parse_over(parse_tree: dict) -> Over:
