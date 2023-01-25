@@ -183,4 +183,7 @@ def _(expression: ast.BinaryOp):
         ast.BinaryOpKind.Modulo: lambda left, right: ColumnType.INT
         if left == right == ColumnType.INT
         else raise_binop_exception(),
+        ast.BinaryOpKind.Like: lambda left, right: ColumnType.BOOL
+        if left == right == ColumnType.STR
+        else raise_binop_exception(),
     }[kind](left_type, right_type)

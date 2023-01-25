@@ -531,6 +531,7 @@ class BinaryOpKind(DJEnum):
     Plus = "+"
     Minus = "-"
     Modulo = "%"
+    Like = "LIKE"
 
 
 # pylint: enable=C0103
