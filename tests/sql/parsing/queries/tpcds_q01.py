@@ -212,7 +212,7 @@ def tpcds_q01():
                                 distinct=True,
                             ),
                             ctes=[],
-                        ),
+                        ).to_select(),
                     ),
                     op=BinaryOpKind.And,
                     right=BinaryOp(

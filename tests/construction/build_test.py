@@ -235,4 +235,4 @@ async def test_build_node_with_unnamed_column(mocker, request):
 
 def test_amenable_name():
     """testing for making an amenable name"""
-    assert amenable_name("hello.名") == "hello_DOT__UNK_"
+    assert amenable_name("hello.名") == "hello_DOT__21517_"

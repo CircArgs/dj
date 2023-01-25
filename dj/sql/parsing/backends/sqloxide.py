@@ -44,7 +44,7 @@ def match_keys(parse_tree: dict, *keys: Set[str]) -> Optional[Set[str]]:
     """match a parse tree having exact keys"""
     tree_keys = set(parse_tree.keys())
     for key in keys:
-        if key==tree_keys:
+        if key == tree_keys:
             return key
 
 
@@ -52,8 +52,9 @@ def match_keys_subset(parse_tree: dict, *keys: Set[str]) -> Optional[Set[str]]:
     """match a parse tree having a subset of keys"""
     tree_keys = set(parse_tree.keys())
     for key in keys:
-        if key<=tree_keys:
+        if key <= tree_keys:
             return key
+
 
 def parse_op(parse_tree: dict) -> Operation:
     """parse an unary or binary operation"""
@@ -120,7 +121,7 @@ def parse_expression(  # pylint: disable=R0911,R0912
             return parse_value(parse_tree["Value"])
         if match_keys(parse_tree, {"Wildcard"}):
             return parse_expression("Wildcard")
-        if match:=match_keys(parse_tree, {"InList"}, {'InSubquery'}):
+        if match := match_keys(parse_tree, {"InList"}, {"InSubquery"}):
             return parse_in(parse_tree[match.pop()])
         if match_keys(parse_tree, {"Nested"}):
             return parse_expression(parse_tree["Nested"])
@@ -154,7 +155,8 @@ def parse_expression(  # pylint: disable=R0911,R0912
                 child=parse_column(subtree["expr"]),
             )
         if match_keys(parse_tree, {"Subquery"}):
-            return parse_query(parse_tree["Subquery"])
+            subquery = parse_query(parse_tree["Subquery"])
+            return subquery.to_select()
     raise DJParseException("Failed to parse Expression")  # pragma: no cover
 
 
@@ -236,17 +238,15 @@ def parse_table(parse_tree: dict) -> TableExpression:
     raise DJParseException("Failed to parse Table")  # pragma: no cover
 
 
-def parse_in(parse_tree: dict)-> In:
+def parse_in(parse_tree: dict) -> In:
     """parse an in statement"""
-    if match_keys(parse_tree, {'expr', 'list', 'negated'}):
-        source = [parse_expression(expr) for expr in parse_tree['list']]
-        return In(parse_expression(parse_tree['expr']), source, parse_tree['negated'])
-    if match_keys(parse_tree, {'expr', 'subquery', 'negated'}):
-        subquery = parse_tree['subquery']
-        if subquery['with']:
-              raise DJParseException("CTES not allowed in subquery.")
-        source = parse_query(subquery).select
-        return In(parse_expression(parse_tree['expr']), source, parse_tree['negated'])
+    if match_keys(parse_tree, {"expr", "list", "negated"}):
+        source = [parse_expression(expr) for expr in parse_tree["list"]]
+        return In(parse_expression(parse_tree["expr"]), source, parse_tree["negated"])
+    if match_keys(parse_tree, {"expr", "subquery", "negated"}):
+        subquery = parse_tree["subquery"]
+        source = parse_query(subquery).to_select()
+        return In(parse_expression(parse_tree["expr"]), source, parse_tree["negated"])
     raise DJParseException("Failed to parse IN")  # pragma: no cover
 
 
@@ -279,12 +279,12 @@ def parse_function(parse_tree: dict) -> Function:
         args = parse_tree["args"]
         names = parse_tree["name"]
         namespace, name = parse_namespace(names).pop_self()
-
+        over = parse_tree["over"] and parse_over(parse_tree["over"])
         return Function(
             name,
             args=[parse_expression(exp) for exp in args],
             distinct=parse_tree["distinct"],
-            over=parse_over(parse_tree["over"]),
+            over=over,
         ).add_namespace(namespace)
     raise DJParseException("Failed to parse Function")  # pragma: no cover
 

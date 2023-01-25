@@ -410,6 +410,13 @@ class Expression(Node):
             return self.parent
         return self
 
+    @property
+    def type(self) -> ColumnType:
+        """return the type of the expression"""
+        from dj.construction.inference import get_type_of_expression
+
+        return get_type_of_expression(self)
+
 
 @dataclass(eq=False)
 class Name(Node):
@@ -720,11 +727,6 @@ class Column(Named):
     _table: Optional["TableExpression"] = field(repr=False, default=None)
     _type: Optional["ColumnType"] = field(repr=False, default=None)
     _expression: Optional[Expression] = field(repr=False, default=None)
-
-    @property
-    def type(self) -> Optional[ColumnType]:
-        """return the type of the column"""
-        return self._type
 
     def add_type(self, type_: ColumnType) -> "Column":
         """add a referenced type"""

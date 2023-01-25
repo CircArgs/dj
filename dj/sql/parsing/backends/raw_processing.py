@@ -12,11 +12,13 @@ from dj.models.column import ColumnType
 raw_pattern = re.compile(r"\${(?P<expr>.*?)\s*?:\s*?(?P<type>.*?)}")
 col_pattern = re.compile(r"{\s*?(?P<expr>.*?)\s*?}")
 
-def clean_hash(string: str)->str:
+
+def clean_hash(string: str) -> str:
     dirty = hash(string)
-    if dirty<0:
+    if dirty < 0:
         return f"N{abs(dirty)}"
     return str(dirty)
+
 
 def process_raw(query: str, dialect: Optional[str] = None) -> Tuple[str, List[Raw]]:
     """processes raw parts of a query for addition to the ast
@@ -25,10 +27,9 @@ def process_raw(query: str, dialect: Optional[str] = None) -> Tuple[str, List[Ra
 
     from dj.sql.parsing.backends.sqloxide import parse
 
-    raws = raw_pattern.finditer(query)
-
+    last_start = 0
     raw_nodes = []
-    for raw in raws:
+    while raw := raw_pattern.search(query[last_start:]):
         expr, type_name = raw.group("expr"), raw.group("type")
         type = ColumnType[type_name.strip().upper()]
         inner_expressions = col_pattern.finditer(expr)
@@ -42,10 +43,14 @@ def process_raw(query: str, dialect: Optional[str] = None) -> Tuple[str, List[Ra
             start, end = inner.span()
             new_expr = new_expr[:start] + "{" + col_exprs_hash + "}" + new_expr[end:]
 
-        cols = parse(f"SELECT {', '.join(col_exprs)}", dialect).select.projection
+        cols = (
+            parse(f"SELECT {', '.join(col_exprs)}", dialect).select.projection
+            if col_exprs
+            else []
+        )
         raw_name = f"RAW_{clean_hash(expr)}"
         start, end = raw.span()
-        query = query[:start] + raw_name + query[end:]
+        query = query[: start + last_start] + raw_name + query[end + last_start :]
         raw_nodes.append(Raw(raw_name, new_expr, type, cols, col_exprs_hashes))
 
     return query, raw_nodes
