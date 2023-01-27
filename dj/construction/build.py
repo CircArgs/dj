@@ -1,5 +1,6 @@
 """Functions to add to an ast DJ node queries"""
 
+# pylint: disable=R0401
 from functools import reduce
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -21,17 +22,19 @@ from dj.sql.parsing.backends.sqloxide import parse
 
 
 # flake8: noqa: C901
-def build_select(  # pylint: disable=too-many-arguments,too-many-locals,too-many-nested-blocks,too-many-branches
+def _build_select_ast(  # pylint: disable=too-many-arguments,too-many-locals,too-many-nested-blocks,too-many-branches
     session: Session,
     select: ast.Select,
     build_plan: BuildPlan,
     build_plan_depth: int,
     database: Database,
     dialect: Optional[str] = None,
-) -> ast.Select:
-    """transforms a select ast by replacing dj node references with their asts"""
+):
+    """
+    Transforms a select ast by replacing dj node references with their asts
+    """
 
-    _, build_plan_lkp = build_plan
+    _, build_plan_lookup = build_plan
 
     dimension_columns: Dict[Node, List[ast.Column]] = {}
     tables: Dict[Node, List[ast.Table]] = {}
@@ -69,9 +72,9 @@ def build_select(  # pylint: disable=too-many-arguments,too-many-locals,too-many
             if build_plan_depth > 0:  # continue following build plan
                 alias = amenable_name(dim_node.name)
 
-                _, dim_build_plan = build_plan_lkp[dim_node]
+                _, dim_build_plan = build_plan_lookup[dim_node]
                 dim_ast = dim_build_plan[0]
-                dim_query: ast.Query = build_query(
+                dim_query: ast.Query = _build_query_ast(
                     session,
                     dim_ast,
                     dim_build_plan,
@@ -139,9 +142,9 @@ def build_select(  # pylint: disable=too-many-arguments,too-many-locals,too-many
         if (
             node.type != NodeType.SOURCE and build_plan_depth > 0
         ):  # continue following build plan
-            _, node_build_plan = build_plan_lkp[node]
+            _, node_build_plan = build_plan_lookup[node]
             node_ast = node_build_plan[0]
-            node_query = build_query(
+            node_query = _build_query_ast(
                 session,
                 node_ast,
                 node_build_plan,
@@ -172,20 +175,20 @@ def build_select(  # pylint: disable=too-many-arguments,too-many-locals,too-many
         for tbl in tbls:
             select.replace(tbl, node_ast)
 
-    return select
 
-
-def build_query(  # pylint: disable=too-many-arguments
+def _build_query_ast(  # pylint: disable=too-many-arguments
     session: Session,
     query: ast.Query,
     build_plan: BuildPlan,
     build_plan_depth: int,
     database: Database,
     dialect: Optional[str] = None,
-) -> ast.Query:
-    """transforms a query ast by replacing dj node references with their asts"""
-    select = query.to_select()
-    build_select(session, select, build_plan, build_plan_depth, database, dialect)
+):
+    """
+    Transforms a query ast by replacing dj node references with their asts
+    """
+    select = query._to_select()  # pylint: disable=W0212
+    _build_select_ast(session, select, build_plan, build_plan_depth, database, dialect)
     for i, exp in enumerate(select.projection):
         if not isinstance(exp, ast.Named):
             name = f"_col{i}"
@@ -195,13 +198,15 @@ def build_query(  # pylint: disable=too-many-arguments
     return query
 
 
-def add_filters_aggs(
+def add_filters_and_aggs_to_query_ast(
     query: ast.Query,
     dialect: Optional[str] = None,
     filters: Optional[List[str]] = None,
     aggs: Optional[List[str]] = None,
-) -> ast.Query:
-    """add filters and aggs to a query ast"""
+):
+    """
+    Add filters and aggs to a query ast
+    """
     if filters:
         filter_asts = (  # pylint: disable=consider-using-ternary
             query.select.where and [query.select.where] or []
@@ -209,6 +214,7 @@ def add_filters_aggs(
 
         for filter_ in filters:
             filter_asts.append(
+                # use parse to get the asts from the strings we got
                 parse(f"select * where {filter_}", dialect).select.where,  # type:ignore
             )
         query.select.where = reduce(
@@ -226,10 +232,8 @@ def add_filters_aggs(
                 dialect,
             ).select.group_by  # type:ignore
 
-    return query
 
-
-async def build_node(  # pylint: disable=too-many-arguments
+async def build_node_for_database(  # pylint: disable=too-many-arguments
     session: Session,
     node: Node,
     dialect: Optional[str] = None,
@@ -237,8 +241,8 @@ async def build_node(  # pylint: disable=too-many-arguments
     filters: Optional[List[str]] = None,
     aggs: Optional[List[str]] = None,
 ) -> Tuple[ast.Query, Database]:
-    """transforms a query ast by replacing dj node references with their asts
-    determines the optimal database to run a query in and builds the query appropriately
+    """
+    Determines the optimal database to run the query in and builds the query AST appropriately
     """
     if node.query is None:
         raise Exception(
@@ -247,7 +251,7 @@ async def build_node(  # pylint: disable=too-many-arguments
     query = parse(node.query, dialect)
     top_dbs: Set[Database] = set()
     if filters or aggs:
-        query = add_filters_aggs(query, dialect, filters, aggs)
+        add_filters_and_aggs_to_query_ast(query, dialect, filters, aggs)
     else:
         top_dbs = {table.database for table in node.tables}
     build_plan = generate_build_plan_from_query(session, query, dialect)
@@ -268,8 +272,8 @@ async def build_node(  # pylint: disable=too-many-arguments
                 return query, top_db
 
     query = build_plan[0]
-
+    query.build(session, build_plan, build_plan_depth, database, dialect)
     return (
-        build_query(session, query, build_plan, build_plan_depth, database, dialect),
+        query,
         database,
     )

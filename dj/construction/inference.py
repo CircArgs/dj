@@ -5,6 +5,7 @@ Functions for type inference.
 # pylint: disable=unused-argument
 
 from functools import singledispatch
+from typing import Callable, Dict
 
 from dj.sql.functions import function_registry
 from dj.sql.parsing import ast
@@ -28,8 +29,8 @@ def _(expression: ast.Alias):
 @get_type_of_expression.register
 def _(expression: ast.Column):
     # column has already determined/stated its type
-    if expression._type:
-        return expression._type
+    if expression.type:
+        return expression.type
 
     # column was derived from some other expression we can get the type of
     if expression.expression:
@@ -67,11 +68,6 @@ def _(expression: ast.Column):
 
 
 @get_type_of_expression.register
-def _(expression: ast.Raw):
-    return expression.type
-
-
-@get_type_of_expression.register
 def _(expression: ast.String):
     return ColumnType.STR
 
@@ -106,55 +102,6 @@ def _(expression: ast.IsNull):
 
 
 @get_type_of_expression.register
-def _(expression: ast.In):
-    return ColumnType.BOOL
-
-
-@get_type_of_expression.register
-def _(expression: ast.Select):
-    if len(expression.projection) != 1:
-        raise DJParseException(
-            "Can only infer type of a SELECT when it "
-            f"has a single expression in its projection. In {expression}."
-        )
-    return get_type_of_expression(expression.projection[0])
-
-
-@get_type_of_expression.register
-def _(expression: ast.Between):
-    expr_type = get_type_of_expression(expression.expr)
-    low_type = get_type_of_expression(expression.low)
-    high_type = get_type_of_expression(expression.high)
-    if expr_type == low_type == high_type:
-        return ColumnType.BOOL
-    raise DJParseException(
-        f"BETWEEN expects all elements to have the same type got {expr_type} BETWEEN {low_type} AND {high_type} in {expression}."
-    )
-
-
-@get_type_of_expression.register
-def _(expression: ast.UnaryOp):
-    kind = expression.op
-    type = get_type_of_expression(expression.expr)
-
-    def raise_unop_exception():
-        raise DJParseException(
-            "Incompatible type in unary operation "
-            f"{expression}. Got {type} in {expression}.",
-        )
-
-    return {
-        ast.UnaryOpKind.Not: lambda type: ColumnType.BOOL,
-        ast.UnaryOpKind.Minus: lambda type: type
-        if type in (ColumnType.INT, ColumnType.FLOAT)
-        else raise_unop_exception(),
-        ast.UnaryOpKind.Plus: lambda type: type
-        if type in (ColumnType.INT, ColumnType.FLOAT)
-        else raise_unop_exception(),
-    }[kind](type)
-
-
-@get_type_of_expression.register
 def _(expression: ast.BinaryOp):
     kind = expression.op
     left_type = get_type_of_expression(expression.left)
@@ -166,7 +113,10 @@ def _(expression: ast.BinaryOp):
             f"{expression}. Got left {left_type}, right {right_type}.",
         )
 
-    return {
+    BINOP_TYPE_COMBO_LOOKUP: Dict[  # pylint: disable=C0103
+        ast.BinaryOpKind,
+        Callable[[ColumnType, ColumnType], ColumnType],
+    ] = {
         ast.BinaryOpKind.And: lambda left, right: ColumnType.BOOL,
         ast.BinaryOpKind.Or: lambda left, right: ColumnType.BOOL,
         ast.BinaryOpKind.Is: lambda left, right: ColumnType.BOOL,
@@ -216,7 +166,5 @@ def _(expression: ast.BinaryOp):
         ast.BinaryOpKind.Modulo: lambda left, right: ColumnType.INT
         if left == right == ColumnType.INT
         else raise_binop_exception(),
-        ast.BinaryOpKind.Like: lambda left, right: ColumnType.BOOL
-        if left == right == ColumnType.STR
-        else raise_binop_exception(),
-    }[kind](left_type, right_type)
+    }
+    return BINOP_TYPE_COMBO_LOOKUP[kind](left_type, right_type)

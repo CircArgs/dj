@@ -1,11 +1,13 @@
 """
 Types to represent the DJ AST used as an intermediate representation for DJ operations
 """
+# pylint: disable=R0401
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from itertools import chain, zip_longest
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
@@ -19,12 +21,16 @@ from typing import (
     Union,
 )
 
-from sqlalchemy.sql import expression
+from sqlmodel import Session
 
+from dj.models.database import Database
 from dj.models.node import Node as DJNode
 from dj.models.node import NodeType as DJNodeType
 from dj.sql.parsing.backends.exceptions import DJParseException
-from dj.typing import ColumnType, ExpressionWithAlias, Identifier
+from dj.typing import ColumnType
+
+if TYPE_CHECKING:
+    from dj.construction.build_planning import BuildPlan  # type:ignore
 
 PRIMITIVES = {int, float, str, bool, type(None)}
 
@@ -728,6 +734,11 @@ class Column(Named):
     _type: Optional["ColumnType"] = field(repr=False, default=None)
     _expression: Optional[Expression] = field(repr=False, default=None)
 
+    @property
+    def type(self) -> Optional[ColumnType]:
+        """return the type of the column"""
+        return self._type
+
     def add_type(self, type_: ColumnType) -> "Column":
         """add a referenced type"""
         self._type = type_
@@ -970,8 +981,9 @@ class Query(Expression):
     select: "Select"
     ctes: List[Alias["Select"]] = field(default_factory=list)
 
-    def to_select(self) -> Select:
-        """compile ctes into the select and return the select
+    def _to_select(self) -> Select:
+        """
+        Compile ctes into the select and return the select
 
         Note: This destroys the structure of the query which cannot be undone
         you may want to deepcopy it first
@@ -980,6 +992,21 @@ class Query(Expression):
             table = Table(cte.name, cte.namespace)
             self.select.replace(table, cte)
         return self.select
+
+    def build(  # pylint: disable=R0913,C0415
+        self,
+        session: Session,
+        build_plan: "BuildPlan",
+        build_plan_depth: int,
+        database: Database,
+        dialect: Optional[str] = None,
+    ):
+        """
+        Transforms a query ast by replacing dj node references with their asts
+        """
+        from dj.construction.build import _build_query_ast
+
+        _build_query_ast(session, self, build_plan, build_plan_depth, database, dialect)
 
     def __str__(self) -> str:
         subquery = bool(self.parent)

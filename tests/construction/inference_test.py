@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlmodel import Session
 
-from dj.construction.compile import compile_query
+from dj.construction.compile import compile_query_ast
 from dj.construction.inference import get_type_of_expression
 from dj.models import Node
 from dj.sql.parsing import ast
@@ -142,24 +142,17 @@ def test_infer_types_complicated(construction_session: Session):
     query = parse(
         """
       SELECT id+1-2/3*5%6&10|8^5,
-      ${JankyFunc({first_name, last_name}, x->x[5], ord):INT},
       id>5,
       id<5,
       id>=5,
       id<=5,
-      id BETWEEN ${cast('5', integer):INT} AND 5,
-      id IN (5, 5),
-      id NOT IN (3, 4),
-      id NOT IN (SELECT -5),
-      first_name LIKE 'Ca%',
       id is null,
       (id=5)=TRUE,
       'hello world',
-      first_name as fn,
-      last_name<>'yoyo' and last_name='yoyo' or last_name='yoyo',
-      last_name,
-      bizarre,
-      (select 5.0)
+         first_name as fn,
+         last_name<>'yoyo' and last_name='yoyo' or last_name='yoyo',
+         last_name,
+         bizarre
       FROM (
       SELECT id,
          first_name,
@@ -169,15 +162,9 @@ def test_infer_types_complicated(construction_session: Session):
         )
     """,
     )
-    compiled = compile_query(construction_session, query)
+    compile_query_ast(construction_session, query)
     types = [
         ColumnType.INT,
-        ColumnType.INT,
-        ColumnType.BOOL,
-        ColumnType.BOOL,
-        ColumnType.BOOL,
-        ColumnType.BOOL,
-        ColumnType.BOOL,
         ColumnType.BOOL,
         ColumnType.BOOL,
         ColumnType.BOOL,
@@ -189,6 +176,5 @@ def test_infer_types_complicated(construction_session: Session):
         ColumnType.BOOL,
         ColumnType.STR,
         ColumnType.BOOL,
-        ColumnType.FLOAT,
     ]
-    assert types == [exp.type for exp in compiled.select.projection]
+    assert types == [get_type_of_expression(exp) for exp in query.select.projection]

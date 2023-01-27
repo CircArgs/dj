@@ -11,27 +11,19 @@ from dj.construction.exceptions import CompoundBuildException
 from dj.construction.utils import get_dj_node, make_name
 from dj.errors import DJError, DJException, ErrorCode
 from dj.models.node import Node, NodeType
-from dj.sql.parsing.ast import (
-    Alias,
-    Column,
-    Expression,
-    Named,
-    Namespace,
-    Query,
-    Select,
-    Table,
-    TableExpression,
-)
+from dj.sql.parsing import ast
 from dj.sql.parsing.backends.sqloxide import parse
 
 
 def _check_col(
-    col: Column,
-    table_nodes: Dict[str, TableExpression],
+    col: ast.Column,
+    table_nodes: Dict[str, ast.TableExpression],
     multiple_refs: Set[str],
-    namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
+    namespaces: Dict[str, Dict[str, Union[ast.Expression, ast.Column]]],
 ) -> Optional[str]:
-    """Check if a column can be had in the query"""
+    """
+    Check if a column can be had in the query
+    """
     namespace = make_name(col.namespace)  # str preceding the column name
     cols = namespaces.get(namespace)
     if cols is None:  # there is just no namespace at all where the node could come from
@@ -71,9 +63,9 @@ def _check_col(
         return None
 
     if namespace:  # there is a proposed namespace that has the column
-        col.add_table(cast(TableExpression, table_nodes[namespace].alias_or_self()))
+        col.add_table(cast(ast.TableExpression, table_nodes[namespace].alias_or_self()))
         col_exp = namespaces[namespace][col.name.name]
-        if isinstance(col_exp, Expression):
+        if isinstance(col_exp, ast.Expression):
             col.add_expression(col_exp)  # pragma: no cover
         else:
             col.add_type(col_exp.type)
@@ -81,10 +73,12 @@ def _check_col(
         for nmpsc, nmspc_cols in namespaces.items():  # pragma: no cover
 
             if col.name.name in nmspc_cols:
-                col.add_table(cast(TableExpression, table_nodes[nmpsc].alias_or_self()))
+                col.add_table(
+                    cast(ast.TableExpression, table_nodes[nmpsc].alias_or_self()),
+                )
 
                 col_exp = namespaces[nmpsc][col.name.name]
-                if isinstance(col_exp, Expression):
+                if isinstance(col_exp, ast.Expression):
                     col.add_expression(col_exp)
                 else:
                     col.add_type(col_exp.type)
@@ -94,20 +88,22 @@ def _check_col(
 
 def _tables_to_namespaces(
     session: Session,
-    namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
-    table: TableExpression,
+    namespaces: Dict[str, Dict[str, Union[ast.Expression, ast.Column]]],
+    table: ast.TableExpression,
 ) -> Tuple[
-    List[Select],
-    Dict[str, TableExpression],
+    List[ast.Select],
+    Dict[str, ast.TableExpression],
     Tuple[Set[Node], Set[Node], Set[Node]],
 ]:
-    """get all usable namespaces and columns from tables"""
+    """
+    Get all usable namespaces and columns from tables
+    """
 
     # namespace: ast node defining namespace
-    table_nodes: Dict[str, TableExpression] = {}
+    table_nodes: Dict[str, ast.TableExpression] = {}
 
     # track subqueries encountered to extract from them after
-    subqueries: List[Select] = []
+    subqueries: List[ast.Select] = []
 
     # used to check need and capacity for merging in dimensions
     dimension_columns: Set[Node] = set()
@@ -116,7 +112,7 @@ def _tables_to_namespaces(
 
     # get all usable namespaces and columns from the tables
     namespace = ""
-    if isinstance(table, Named):
+    if isinstance(table, ast.Named):
         namespace = make_name(table.namespace, table.name.name)
 
     # you cannot combine an unnamed subquery with anything else
@@ -140,17 +136,17 @@ def _tables_to_namespaces(
 
     namespaces[namespace] = {}
 
-    if isinstance(table, Alias):
-        table: Union[Table, Select] = table.child  # type: ignore
+    if isinstance(table, ast.Alias):
+        table: Union[ast.Table, ast.Select] = table.child  # type: ignore
 
     # subquery handling
     # we track subqueries separately and extract at the end
     # but introspect the columns to make sure the parent query selection is valid
-    if isinstance(table, Select):
+    if isinstance(table, ast.Select):
         subqueries.append(table)
 
         for col in table.projection:
-            if not isinstance(col, Named):
+            if not isinstance(col, ast.Named):
                 CompoundBuildException().append(  # pragma: no cover
                     error=DJError(
                         code=ErrorCode.INVALID_SQL_QUERY,
@@ -176,7 +172,7 @@ def _tables_to_namespaces(
                 sources_transforms.add(table_node)
             else:
                 dimensions_tables.add(table_node)
-            cast(Table, table).add_dj_node(table_node)
+            cast(ast.Table, table).add_dj_node(table_node)
     table_nodes[namespace] = table
 
     return (
@@ -189,25 +185,27 @@ def _tables_to_namespaces(
 # pylint: disable=R0914, R0913, R0912, W0621
 def _validate_groupby_filters_ons_columns(
     session: Session,
-    select: Select,
-    table_nodes: Dict[str, TableExpression],
+    select: ast.Select,
+    table_nodes: Dict[str, ast.TableExpression],
     multiple_refs: Set[str],
-    namespaces: Dict[str, Dict[str, Union[Expression, Column]]],
+    namespaces: Dict[str, Dict[str, Union[ast.Expression, ast.Column]]],
 ) -> Set[Node]:
-    """check groupby, filters, and join ons columns for existence"""
+    """
+    Check groupby, filters, and join ons columns for existence
+    """
 
     # used to check need and capacity for merging in dimensions
     dimension_columns: Set[Node] = set()
 
-    gbfo: List[Tuple[Column, bool]] = []
+    gbfo: List[Tuple[ast.Column, bool]] = []
 
     if select.group_by:
         gbfo += [
             (col, True)
-            for col in chain(*(exp.find_all(Column) for exp in select.group_by))
+            for col in chain(*(exp.find_all(ast.Column) for exp in select.group_by))
         ]
         if select.having:
-            gbfo += [(col, True) for col in select.having.find_all(Column)]
+            gbfo += [(col, True) for col in select.having.find_all(ast.Column)]
     elif select.having:
         CompoundBuildException().append(
             DJError(
@@ -222,11 +220,11 @@ def _validate_groupby_filters_ons_columns(
         )
 
     if select.where:
-        gbfo += [(col, True) for col in select.where.find_all(Column)]
+        gbfo += [(col, True) for col in select.where.find_all(ast.Column)]
 
     if select.from_.joins:
         for join in select.from_.joins:
-            gbfo += [(col, False) for col in join.on.find_all(Column)]
+            gbfo += [(col, False) for col in join.on.find_all(ast.Column)]
 
     for col, dim_allowed in gbfo:
         bad_namespace = False
@@ -281,9 +279,9 @@ def _validate_groupby_filters_ons_columns(
                             message="Cannot extract dependencies from SELECT",
                         )
                     else:
-                        dim_table = Table(
+                        dim_table = ast.Table(
                             col.namespace.names[0],  # type: ignore
-                            Namespace(col.namespace.names[1:]),  # type: ignore
+                            ast.Namespace(col.namespace.names[1:]),  # type: ignore
                         )
                         dim_table.add_dj_node(dim)
                         col.namespace = None
@@ -293,11 +291,13 @@ def _validate_groupby_filters_ons_columns(
 
 
 # flake8: noqa: C901
-def compile_select(
+def compile_select_ast(
     session: Session,
-    select: Select,  # pylint: disable= W0621
-) -> Select:
-    """get all dj node dependencies from a sql select while validating"""
+    select: ast.Select,  # pylint: disable= W0621
+):
+    """
+    Get all dj node dependencies from a sql select while validating
+    """
     # first, we get the tables in the from of the select including subqueries
     # we take stock of the columns that can come from said tables
     # then we check the select, groupby,
@@ -307,13 +307,13 @@ def compile_select(
     tables = select.from_.tables + [join.table for join in select.from_.joins]
 
     # namespaces track the namespace: list of columns that can be had from it
-    namespaces: Dict[str, Dict[str, Union[Expression, Column]]] = {}
+    namespaces: Dict[str, Dict[str, Union[ast.Expression, ast.Column]]] = {}
 
     # namespace: ast node defining namespace
-    table_nodes: Dict[str, TableExpression] = {}
+    table_nodes: Dict[str, ast.TableExpression] = {}
 
     # track subqueries encountered to extract from them after
-    subqueries: List[Select] = []
+    subqueries: List[ast.Select] = []
 
     # used to check need and capacity for merging in dimensions
     dimension_columns: Set[Node] = set()
@@ -334,7 +334,7 @@ def compile_select(
 
     # organize column discovery recording dupes
     # we'll use this lookup to validate columns
-    no_namespace_safe_cols: Dict[str, Union[Expression, Column]] = {}
+    no_namespace_safe_cols: Dict[str, Union[ast.Expression, ast.Column]] = {}
     multiple_refs: Set[str] = set()
     for namespaces_cols in namespaces.values():
         for col, exp_col in namespaces_cols.items():
@@ -352,9 +352,9 @@ def compile_select(
     )
 
     # check projection
-    for col in chain(*(exp.find_all(Column) for exp in select.projection)):  # type: ignore
+    for col in chain(*(exp.find_all(ast.Column) for exp in select.projection)):  # type: ignore
         _check_col(
-            cast(Column, col),
+            cast(ast.Column, col),
             table_nodes,
             multiple_refs,
             namespaces,
@@ -397,25 +397,29 @@ def compile_select(
             )
 
     for subquery in subqueries:
-        compile_select(session, subquery)
-
-    return select
+        compile_select_ast(session, subquery)
 
 
-def compile_query(
+def compile_query_ast(
     session: Session,
-    query: Query,
-) -> Query:
-    """get all dj node dependencies from a sql query while validating"""
-    # query = query.copy()
-    select = query.to_select()
-    compile_select(session, select)
-    return query
+    query: ast.Query,
+):
+    """
+    Get all dj node dependencies from a sql query while validating
+    """
+    select = query._to_select()  # pylint: disable=W0212
+    compile_select_ast(session, select)
 
 
-def compile_node(session: Session, node: Node, dialect: Optional[str] = None) -> Query:
-    """get all dj node dependencies from a sql query while validating"""
+def compile_node(
+    session: Session,
+    node: Node,
+    dialect: Optional[str] = None,
+) -> ast.Query:
+    """
+    Get all dj node dependencies from a sql query while validating
+    """
     if node.query is None:
         raise DJException(f"Cannot compile node `{node.name}` with no query.")
     query = parse(node.query, dialect)
-    return compile_query(session, query)
+    return compile_query_ast(session, query)
