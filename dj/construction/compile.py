@@ -390,7 +390,6 @@ def _compile_select_ast(
     for subquery in subqueries:
         _compile_select_ast(session, subquery)
 
-
 def compile_node(
     session: Session,
     node: NodeRevision,

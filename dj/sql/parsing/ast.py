@@ -400,7 +400,7 @@ class Node(ABC):
         """
         return type(self) == type(other) and all(  # pylint: disable=C0123
             s == o
-            if type(s) in PRIMITIVES  # pylint: disable=C0123
+            if type(s) in PRIMITIVES or isinstance(s, Ident)  # pylint: disable=C0123
             else type(s) == type(o)  # pylint: disable=C0123
             for s, o in zip(
                 (self.fields(False, False, False, True)),
@@ -464,9 +464,13 @@ class Expression(Node):
 
         return get_type_of_expression(self)
 
+class Ident(Node):
+    """
+    Base class for any Node used as an identifier string or strings
+    """
 
 @dataclass(eq=False)
-class Name(Node):
+class Name(Ident):
     """
     The string name specified in sql with quote style
     """
@@ -490,7 +494,7 @@ TNamed = TypeVar("TNamed", bound="Named")  # pylint: disable=C0103
 
 
 @dataclass(eq=False)
-class Namespace(Node):
+class Namespace(Ident):
     """
     Represents a sequence of names prececeding some Table or Column
     """
