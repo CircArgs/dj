@@ -22,12 +22,14 @@ services:
       - .:/code
     ports:
       - "8000:8000"
+      - "8888:8888"
     depends_on:
       - db_migration
       - postgres_examples
       - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    command: "/bin/sh /code/start.sh" 
 
   watchdog:
     container_name: watchdog
