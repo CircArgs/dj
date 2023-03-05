@@ -5,6 +5,7 @@ import re
 
 # pylint: disable=R0401,C0302
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from enum import Enum
@@ -158,19 +159,60 @@ class Node(ABC):
 
     """
 
+    __dialect: str = "ansi"
+    dialect: str
     parent: Optional["Node"] = None
     parent_key: Optional[str] = None
-    validate_strict: Optional[bool] = True  # how to validate; `None` is no validation
+    validate_strict: Optional[bool] = True
     __instantiated = False
 
     def __post_init__(self):
+        self.dialect = self.__dialect
         self.add_self_as_parent()
         self.__instantiated = True
+
+    @classmethod
+    @contextmanager
+    def use_strict_validation(cls, validate_strict: Optional[bool] = True):
+        """
+        Context manager for validation level
+        """
+        cls.validate_strict = validate_strict
+
+        yield
+
+        cls.validate_strict = True
+
+    @classmethod
+    @contextmanager
+    def use_dialect(cls, dialect: str = "ansi"):
+        """
+        Context manager for setting the dialect of the ast cls
+        """
+        cls.__dialect = dialect
+        yield
+        cls.__dialect = "ansi"
 
     def validate(self):
         """
         Validate a Node
         """
+
+    def validate_dialects(self) -> str:
+        """
+        Ensure dialects of all nodes in the sub-ast are the same
+        Returns the single dialect if all are the same
+        """
+
+        dialects = {child.validate_dialects() for child in self.children} | {
+            self.dialect,
+        }
+
+        if len(dialects) > 1:
+            raise DJParseException(
+                f"Found multiple dialects `{dialects}` in ast: `{self}`.",
+            )
+        return dialects.pop()
 
     def clear_parent(self: TNode) -> TNode:
         """
@@ -726,8 +768,12 @@ class In(Expression):
     def validate(self):
 
         super().validate()
-        if isinstance(self.source, Select) and len(self.source.projection) > 1:
-            raise DJParseException("IN subquery cannot have more than a single column.")
+
+        if self.validate_strict is not None:
+            if isinstance(self.source, Select) and len(self.source.projection) > 1:
+                raise DJParseException(
+                    "IN subquery cannot have more than a single column.",
+                )
 
     def __str__(self) -> str:
         not_ = "NOT " if self.negated else ""
@@ -755,10 +801,12 @@ class Over(Expression):
     def validate(self):
 
         super().validate()
-        if not (self.partition_by or self.order_by):
-            raise DJParseException(
-                "An OVER requires at least a PARTITION BY or ORDER BY",
-            )
+
+        if self.validate_strict is not None:
+            if not (self.partition_by or self.order_by):
+                raise DJParseException(
+                    "An OVER requires at least a PARTITION BY or ORDER BY",
+                )
 
     def __str__(self) -> str:
         partition_by = (  # pragma: no cover
@@ -922,8 +970,11 @@ class Raw(Expression):
 
     def validate(self):
         super().validate()
-        if self.expr_string is None or self.type is None:
-            raise DJParseException("Raw requires a name, string and type")
+
+        if self.validate_strict is not None:
+            if self.expr_string is None or self.type is None:
+                raise DJParseException("Raw requires a name, string and type")
+        return True
 
     def __str__(self) -> str:
         return self.expr_string.format_map(  # type:ignore
@@ -980,8 +1031,10 @@ class Null(Value):
 
     def validate(self):
         super().validate()
-        if self.value is not None:
-            raise DJParseException("NULL does not take a value.")
+
+        if self.validate_strict is not None:
+            if self.value is not None:
+                raise DJParseException("NULL does not take a value.")
 
 
 @dataclass(eq=False)
@@ -998,11 +1051,13 @@ class Number(Value):
 
     def validate(self):
         super().validate()
-        if type(self.value) not in (float, int):
-            try:
-                self.value = int(self.value)
-            except ValueError:
-                self.value = float(self.value)
+
+        if self.validate_strict is not None:
+            if type(self.value) not in (float, int):
+                try:
+                    self.value = int(self.value)
+                except ValueError:
+                    self.value = float(self.value)
 
 
 class String(Value):
@@ -1038,10 +1093,13 @@ class Alias(Named, Generic[AliasedType]):
 
     def validate(self):
         super().validate()
-        if isinstance(self.child, Alias):
-            if self.validate_strict:
-                raise DJParseException("An alias cannot descend from another Alias.")
-            self.child = self.child.child
+        if self.validate_strict is not None:
+            if isinstance(self.child, Alias):
+                if self.validate_strict:
+                    raise DJParseException(
+                        "An alias cannot descend from another Alias.",
+                    )
+                self.child = self.child.child
 
     def replace(  # pylint: disable=invalid-name
         self,
@@ -1344,10 +1402,13 @@ class Select(Expression):  # pylint: disable=R0902
 
     def validate(self):
         super().validate()
-        if not self.projection:
-            raise DJParseException(
-                "Expected at least a single item in projection at {self}.",
-            )
+
+        if self.validate_strict is not None:
+            if not self.projection:
+                raise DJParseException(
+                    "Expected at least a single item in projection at {self}.",
+                )
+        return True
 
     def add_aliases_to_unnamed_columns(self) -> None:
         """

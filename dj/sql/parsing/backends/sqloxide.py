@@ -437,12 +437,13 @@ def parse(
     oxide_parsed = parse_sql(sql, dialect)
     if len(oxide_parsed) != 1:
         raise DJParseException("Expected a single sql statement.")
-    query_ast = parse_oxide_tree(oxide_parsed[0])
-    if process_raw:
-        for func in query_ast.find_all(ast.Function):
-            if str(func.name).upper() == "RAW":
-                query_ast.replace(
-                    func,
-                    func.to_raw(lambda sub_sql, _: parse(sub_sql, dialect, False)),
-                )
+    with ast.Node.use_dialect(dialect):
+        query_ast = parse_oxide_tree(oxide_parsed[0])
+        if process_raw:
+            for func in query_ast.find_all(ast.Function):
+                if str(func.name).upper() == "RAW":
+                    query_ast.replace(
+                        func,
+                        func.to_raw(lambda sub_sql, _: parse(sub_sql, dialect, False)),
+                    )
     return query_ast

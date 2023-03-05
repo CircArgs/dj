@@ -637,17 +637,19 @@ def test_double_alias():
     Test that a double alias resolves to the second alias
     under non-strict validation
     """
-    Alias.validate_strict = False
-    assert Alias(Name("a"), child=Alias(Name("b"), child=Table(Name("tbl")))).compare(
-        Alias(
-            name=Name(name="a"),
-            namespace=None,
-            child=Table(
-                name=Name(name="tbl"),
+    with Alias.use_strict_validation(False):
+        assert Alias(
+            Name("a"),
+            child=Alias(Name("b"), child=Table(Name("tbl"))),
+        ).compare(
+            Alias(
+                name=Name(name="a"),
+                namespace=None,
+                child=Table(
+                    name=Name(name="tbl"),
+                ),
             ),
-        ),
-    )
-    Alias.validate_strict = True
+        )
 
 
 def test_alias_replace():
