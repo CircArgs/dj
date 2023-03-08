@@ -19,7 +19,6 @@ from dj.models.node import NodeRevision, NodeType
 from dj.sql.parsing import ast
 from dj.sql.parsing.backends.sqloxide import parse
 
-
 def _get_tables_from_select(select: ast.Select) -> Dict[NodeRevision, List[ast.Table]]:
     """
     Extract all tables (source, transform, dimensions)
@@ -270,14 +269,7 @@ def add_filters_and_aggs_to_query_ast(
                 temp_select.where,  # type:ignore
             )
             projection_addition += list(temp_select.find_all(ast.Column))
-        query.select.where = reduce(
-            lambda left, right: ast.BinaryOp(
-                ast.BinaryOpKind.And,
-                left,
-                right,
-            ),
-            filter_asts,
-        )
+        query.select.where = ast.BinaryOp.And(*filter_asts)
 
     if dimensions:
         for agg in dimensions:

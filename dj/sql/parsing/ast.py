@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from itertools import chain, zip_longest
+from functools import reduce
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -663,6 +664,31 @@ class BinaryOp(Operation):
     op: BinaryOpKind  # pylint: disable=C0103
     left: Expression
     right: Expression
+
+    @classmethod
+    def And(cls, left: Expression, right: Optional[Expression] = None, *rest: Expression)->Union["BinaryOp", Expression]:
+        """
+        Create a BinaryOp of kind BinaryOpKind.Eq rolling up all expressions
+        """
+        if right is None:
+            return left
+        return reduce(
+            lambda left, right: BinaryOp(
+                BinaryOpKind.And,
+                left,
+                right,
+            ),
+            (left, right, *rest),
+        )
+    
+    @classmethod
+    def Eq(cls, left: Expression, right: Optional[Expression])->Union["BinaryOp", Expression]:
+        """
+        Create a BinaryOp of kind BinaryOpKind.Eq
+        """
+        if right is None:
+            return left
+        return BinaryOp(BinaryOpKind.Eq, left, right)
 
     def __str__(self) -> str:
         return f"{self.left} {self.op.value} {self.right}"

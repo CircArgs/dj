@@ -2,20 +2,31 @@
 Functions for generating build plans for nodes
 """
 from functools import reduce
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Iterable, Union
 
 from sqlmodel import Session
 
 from dj.construction.extract import (
     extract_dependencies_from_node,
-    extract_dependencies_from_query_ast,
+    extract_dependencies_from_compiled_query_ast,
 )
+from dj.sql.parsing import parse
 from dj.models.database import Database
 from dj.models.node import NodeRevision, NodeType
 from dj.sql.dag import get_cheapest_online_database
 from dj.sql.parsing import ast
 
-BuildPlan = Tuple[ast.Query, Dict[NodeRevision, Tuple[Set[Database], "BuildPlan"]]]  # type: ignore
+QueryMaker = Iterable[ast.Query]
+
+def make_query(query: Union[str, ast.Query], dialect: Optional[str] = None)->Iterable[ast.Query]:
+    if isinstance(query, ast.Query):
+        yield query
+    else:
+        yield parse(query, dialect)
+
+
+BuildPlan = Tuple[QueryMaker, Dict[NodeRevision, Tuple[Set[Database], "BuildPlan"]]]  # type: ignore
+
 
 
 def get_materialized_databases_for_node(
@@ -33,7 +44,7 @@ def get_materialized_databases_for_node(
     return {table.database for table in tables}
 
 
-def generate_build_plan_from_query(
+def generate_build_plan_from_compiled_query(
     session: Session,
     query: ast.Query,
     dialect: Optional[str] = None,
@@ -48,7 +59,7 @@ def generate_build_plan_from_query(
         replace nodes with the desired ast
     """
 
-    tree, deps, _ = extract_dependencies_from_query_ast(session, query)
+    tree, deps, _ = extract_dependencies_from_compiled_query_ast(query)
     databases = {}
     for node, tables in deps.items():
         columns = {col.name.name for table in tables for col in table.columns}
@@ -59,7 +70,7 @@ def generate_build_plan_from_query(
             build_plan = generate_build_plan_from_node(session, node, dialect)
         databases[node] = (node_mat_dbs, build_plan)
 
-    return tree, databases
+    return make_query(tree, dialect), databases
 
 
 def generate_build_plan_from_node(
@@ -80,7 +91,8 @@ def generate_build_plan_from_node(
         raise Exception(
             "Node has no query. Cannot generate a build plan without a query.",
         )
-    tree, deps, _ = extract_dependencies_from_node(session, node, dialect)
+    deps = node.parents
+    tree = make_query(node.query, dialect)
     databases = {}
     for dependent_node, tables in deps.items():
         columns = {col.name.name for table in tables for col in table.columns}

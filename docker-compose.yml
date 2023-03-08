@@ -29,7 +29,7 @@ services:
       - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: "/bin/sh /code/start.sh" 
+    command: "/bin/sh /code/start.sh"
 
   watchdog:
     container_name: watchdog
