@@ -1334,9 +1334,7 @@ class Select(Expression):  # pylint: disable=R0902
     having: Optional[Expression] = None
     projection: List[Expression] = field(default_factory=list)
     where: Optional[Expression] = None
-    limit: Optional[Number] = None
-    distinct: bool = False
-    order_by: List[Order] = field(default_factory=list)
+
 
     def __post_init__(self):
         super().__post_init__()
@@ -1373,15 +1371,16 @@ class Select(Expression):  # pylint: disable=R0902
             parts.extend(("GROUP BY ", ", ".join(str(exp) for exp in self.group_by)))
         if self.having is not None:
             parts.extend(("HAVING ", str(self.having), "\n"))
-        if self.limit is not None:
-            parts.extend(("LIMIT ", str(self.limit), "\n"))
-        if self.order_by:
-            parts.extend(("ORDER BY ", ", ".join(str(exp) for exp in self.order_by)))
+
         select = " ".join(parts)
         if subselect:
             return "(" + select + ")"
         return select
 
+@dataclass(eq=False)
+class SetOp(Node):
+    kind: str
+    select: Select
 
 @dataclass(eq=False)
 class Query(Expression):
@@ -1391,6 +1390,9 @@ class Query(Expression):
 
     select: "Select"
     ctes: List[Alias["Select"]] = field(default_factory=list)
+    limit: Optional[Number] = None
+    quantifier: str= ""
+    ordering: List[Order] = field(default_factory=list)
 
     def _to_select(self) -> Select:
         """
@@ -1445,6 +1447,10 @@ class Query(Expression):
         ctes = ",\n".join(f"{cte.name} AS {(cte.child)}" for cte in self.ctes)
         with_ = "WITH" if ctes else ""
         select = f"({(self.select)})" if subquery else (self.select)
+        if self.limit is not None:
+            parts.extend(("LIMIT ", str(self.limit), "\n"))
+        if self.order_by:
+            parts.extend(("ORDER BY ", ", ".join(str(exp) for exp in self.order_by)))
         return f"""
             {with_}
             {ctes}
