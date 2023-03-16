@@ -788,7 +788,7 @@ def client(  # pylint: disable=too-many-statements
 
 def pytest_addoption(parser):
     """
-    Add a --tpcds flag that enables tpcds query parsing tests
+    Add test flags
     """
     parser.addoption(
         "--tpcds",
@@ -796,4 +796,11 @@ def pytest_addoption(parser):
         dest="tpcds",
         default=False,
         help="include tests for parsing TPC-DS queries",
+    )
+    parser.addoption(
+        "--tpcds-antlr",
+        action="store_true",
+        dest="tpcds-antlr",
+        default=False,
+        help="include tests for parsing TPC-DS queries using antlr",
     )
