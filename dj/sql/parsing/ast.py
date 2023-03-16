@@ -32,7 +32,6 @@ from dj.models.node import NodeType as DJNodeType
 from dj.sql.functions import function_registry
 from dj.sql.parsing.backends.exceptions import DJParseException
 from dj.typing import ColumnType, ColumnTypeError
-from datetime import timedelta
 
 if TYPE_CHECKING:
     from dj.construction.build_planning import BuildPlan  # type:ignore
@@ -459,6 +458,7 @@ class Node(ABC):
         Get the string of a node
         """
 
+
 TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C0103
 
 
@@ -466,6 +466,17 @@ class Expression(Node):
     """
     An expression type simply for type checking
     """
+
+    def alias_or_self(
+        self: TExpression,
+    ) -> Union[TExpression, "Alias[TExpression]"]:
+        """
+        Get the alias name of an expression if it is
+        the descendant of an alias otherwise get its own name
+        """
+        if isinstance(self.parent, Alias):
+            return self.parent
+        return self
 
     @property
     def type(self) -> ColumnType:
@@ -500,16 +511,59 @@ class Name(Node):
 
     name: str
     quote_style: str = ""
-    namespace: Optional["Name"] = None
-    
+
+    def to_named_type(self, named_type: Type["Named"]) -> "Named":
+        """
+        Transform the name into a specific Named that only requires a name to create
+        """
+        return named_type(self)
+
     def __str__(self) -> str:
-        namespace = str(self.namespace)+"." if self.namespace else ""
         return (
-            f"{namespace}{self.quote_style}{self.name}{self.quote_style}"  # pylint: disable=C0301
+            f"{self.quote_style}{self.name}{self.quote_style}"  # pylint: disable=C0301
         )
 
 
 TNamed = TypeVar("TNamed", bound="Named")  # pylint: disable=C0103
+
+
+@dataclass(eq=False)
+class Namespace(Node):
+    """
+    Represents a sequence of names prececeding some Table or Column
+    """
+
+    names: List[Name]
+
+    def to_named_type(self, named_type: Type[TNamed]) -> TNamed:
+        """
+        Transform the namespace into a column
+        whose name is the last name in the namespace
+
+        if the namespace contains a single name,
+            the created column will have no namespace
+        otherwise, the remaining names for the column's namespace
+        """
+        if not self.names:
+            raise DJParseException("Namespace is empty")
+        converted = named_type(self.names.pop().clear_parent())
+        if self.names:
+            converted.add_namespace(self)
+        return converted
+
+    def pop_self(self) -> Tuple["Namespace", Name]:
+        """
+        A utility function that returns the last name
+        and the remaining namespace as a tuple
+
+        useful for parsing compound identifiers and revealing
+        the last name for another attribute
+        """
+        last = self.names.pop().clear_parent()
+        return self, last
+
+    def __str__(self) -> str:
+        return ".".join(str(name) for name in self.names)
 
 
 @dataclass(eq=False)  # type: ignore
@@ -519,26 +573,511 @@ class Named(Expression):
     """
 
     name: Name
-    
-    @property
-    def namespace(self):
-        namespace = []
-        name = self.name
-        while name.namespace:
-            namespace.append(name.namespace)
-            name = name.namespace
-        return namespace[::-1]
 
-    def identifier(self, quotes: bool = True) -> str:
-        if quotes:
-            return str(self.name)
-        
-        return ".".join(
-            (
-                *(name.name for name in self.namespace),
-                self.name.name,
-            )
+    namespace: Optional[Namespace] = None
+
+    def add_namespace(self: TNamed, namespace: Optional[Namespace]) -> TNamed:
+        """
+        Add a namespace to the Named if one does not exist
+        """
+        if self.namespace is None:
+            self.namespace = namespace
+        return self
+
+    def alias_or_name(self) -> Name:
+        """
+        Get the alias name of a node if it is the
+        descendant of an alias otherwise get its own name
+        """
+        return self.alias_or_self().name
+
+
+class Operation(Expression):
+    """
+    A type to overarch types that operate on other expressions
+    """
+
+
+# pylint: disable=C0103
+class UnaryOpKind(DJEnum):
+    """
+    The accepted unary operations
+    """
+
+    Plus = "+"
+    Minus = "-"
+    Not = "NOT"
+
+
+# pylint: enable=C0103
+
+
+@dataclass(eq=False)
+class UnaryOp(Operation):
+    """
+    An operation that operates on a single expression
+    """
+
+    op: UnaryOpKind  # pylint: disable=C0103
+    expr: Expression
+
+    def __str__(self) -> str:
+        return f"{self.op.value} {(self.expr)}"
+
+
+# pylint: disable=C0103
+class BinaryOpKind(DJEnum):
+    """
+    The DJ AST accepted binary operations
+    """
+
+    And = "AND"
+    Or = "OR"
+    Is = "IS"
+    Eq = "="
+    NotEq = "<>"
+    Gt = ">"
+    Lt = "<"
+    GtEq = ">="
+    LtEq = "<="
+    BitwiseOr = "|"
+    BitwiseAnd = "&"
+    BitwiseXor = "^"
+    Multiply = "*"
+    Divide = "/"
+    Plus = "+"
+    Minus = "-"
+    Modulo = "%"
+    Like = "LIKE"
+
+
+# pylint: enable=C0103
+
+
+@dataclass(eq=False)
+class BinaryOp(Operation):
+    """
+    Represents an operation that operates on two expressions
+    """
+
+    op: BinaryOpKind  # pylint: disable=C0103
+    left: Expression
+    right: Expression
+
+    def __str__(self) -> str:
+        return f"{self.left} {self.op.value} {self.right}"
+
+
+@dataclass(eq=False)
+class Between(Operation):
+    """
+    A between statement
+    """
+
+    expr: Expression
+    low: Expression
+    high: Expression
+
+    def __str__(self) -> str:
+        return f"{(self.expr)} BETWEEN {(self.low)} AND {(self.high)}"
+
+
+@dataclass(eq=False)
+class Case(Expression):
+    """
+    A case statement of branches
+    """
+
+    conditions: List[Expression] = field(default_factory=list)
+    else_result: Optional[Expression] = None
+    operand: Optional[Expression] = None
+    results: List[Expression] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        branches = "\n\tWHEN ".join(
+            f"{(cond)} THEN {(result)}"
+            for cond, result in zip(self.conditions, self.results)
         )
+        return f"""(CASE
+        WHEN {branches}
+        ELSE {(self.else_result)}
+    END)"""
+
+    def is_aggregation(self) -> bool:
+        return all(result.is_aggregation() for result in self.results) and (
+            self.else_result.is_aggregation() if self.else_result else True
+        )
+
+
+@dataclass(eq=False)
+class In(Expression):
+    """
+    An in expression
+    """
+
+    expr: Expression
+    source: Union[List[Expression], "Select"]
+    negated: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+
+        super().validate()
+        if isinstance(self.source, Select) and len(self.source.projection) > 1:
+            raise DJParseException("IN subquery cannot have more than a single column.")
+
+    def __str__(self) -> str:
+        not_ = "NOT " if self.negated else ""
+        source = (
+            str(self.source)
+            if isinstance(self.source, Select)
+            else "(" + ", ".join(str(exp) for exp in self.source) + ")"
+        )
+        return f"{self.expr} {not_}IN {source}"
+
+
+@dataclass(eq=False)
+class Over(Expression):
+    """
+    Represents a function used in a statement
+    """
+
+    partition_by: List[Expression] = field(default_factory=list)
+    order_by: List["Order"] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+
+        super().validate()
+        if not (self.partition_by or self.order_by):
+            raise DJParseException(
+                "An OVER requires at least a PARTITION BY or ORDER BY",
+            )
+
+    def __str__(self) -> str:
+        partition_by = (  # pragma: no cover
+            " PARTITION BY " + ", ".join(str(exp) for exp in self.partition_by)
+            if self.partition_by
+            else ""
+        )
+        order_by = (
+            " ORDER BY " + ", ".join(str(exp) for exp in self.order_by)
+            if self.order_by
+            else ""
+        )
+        consolidated_by = "\n".join(
+            po_by for po_by in (partition_by, order_by) if po_by
+        )
+        return f"OVER ({consolidated_by})"
+
+
+RAW_COL_PAT = re.compile(r"{\s*?(?P<expr>.*?)\s*?}")
+
+
+@dataclass(eq=False)
+class Cast(Operation):
+    """
+    Case statement
+
+    >>> str(Cast(Number(5), ColumnType.Float))
+    'CAST(5 AS FLOAT)'
+    """
+
+    expr: Expression
+    type_: "ColumnType"
+
+    def __str__(self) -> str:
+        return f"CAST({self.expr} AS {self.type})"
+
+    def is_aggregation(self) -> bool:
+        return self.expr.is_aggregation()
+
+
+@dataclass(eq=False)
+class Function(Named, Operation):
+    """
+    Represents a function used in a statement
+    """
+
+    args: List[Expression] = field(default_factory=list)
+    distinct: bool = False
+    over: Optional[Over] = None
+
+    def __str__(self) -> str:
+        distinct = "DISTINCT " if self.distinct else ""
+        over = f" {self.over}" if self.over else ""
+        return (
+            f"{self.name}({distinct}{', '.join(str(arg) for arg in self.args)}){over}"
+        )
+
+    def is_aggregation(self) -> bool:
+        return function_registry[self.name.name.upper()].is_aggregation
+
+    def to_raw(  # pylint: disable=R0914
+        self,
+        parser: Callable[[str, Optional[str]], "Query"],
+        dialect: Optional[str] = None,
+    ) -> "Raw":
+        """
+        Attempt to convert a function to a Raw
+        """
+        if str(self.name).upper() != "RAW":
+            raise DJParseException(
+                f"Can only convert a function named `RAW` to a Raw node but got {self.name}.",
+            )
+        if self.distinct:
+            raise DJParseException(f"Raw cannot include DISTINCT in {self}.")
+        if len(self.args) not in (2, 3):
+            raise DJParseException(
+                "Raw expects to be of the form "
+                "`Raw(EXPRESSION, COLUMNTYPE, [IS_AGGREGATION: BOOLEAN]).",
+            )
+        if not isinstance(self.args[1], String):
+            raise DJParseException(
+                "Raw expects the second argument to be parseable "
+                f"as a String not {type(self.args[1])}.",
+            )
+        try:
+            type_ = ColumnType(self.args[1].value)
+        except ColumnTypeError as exc:
+            raise DJParseException(
+                "Raw expects the second argument to be a "
+                f"ColumnType not {self.args[1]} in {self}.",
+            ) from exc
+
+        is_aggregation = False
+        if len(self.args) == 3:
+            if not isinstance(self.args[2], Boolean):
+                raise DJParseException(
+                    "Raw expects the third argument - which is optional - "
+                    f"to be a Boolean not {type(self.args[1])}.",
+                )
+            is_aggregation = self.args[2].value
+
+        query = (  # pragma: no cover
+            str(self.args[0]).strip(
+                "".join(name.quote_style for name in self.args[0].find_all(Name)),
+            )
+            if not isinstance(self.args[0], String)
+            else self.args[0].value
+        )
+        last_start = 0
+        col_expression_strs = []
+        expression_replace_names = []
+        while col_exp := RAW_COL_PAT.search(query[last_start:]):
+            start, end = col_exp.span()
+            match = col_exp.group("expr")
+            col_expression_strs.append(match)
+            expression_replace_name = "EXP_" + _raw_clean_hash(
+                (match, last_start, start, end),
+            )
+            expression_replace_names.append(expression_replace_name)
+            expression_replace_pattern = "{" + expression_replace_name + "}"
+            query = (
+                query[: start + last_start]
+                + expression_replace_pattern
+                + query[end + last_start :]
+            )
+            last_start += start + len(expression_replace_pattern)
+        expressions = (
+            parser(
+                f"SELECT {', '.join(col_expression_strs)}",
+                dialect,
+            ).select.projection
+            if col_expression_strs
+            else []
+        )
+        return Raw(
+            query,
+            type_,
+            is_aggregation,
+            expressions,
+            expression_replace_names,
+            self.over,
+        )
+
+
+@dataclass(eq=False)
+class Raw(Expression):
+    """
+    Raw expression
+    """
+
+    expr_string: Optional[str] = None
+    type_: Optional[ColumnType] = None
+    is_aggregation_: bool = False
+    expressions: List[Expression] = field(default_factory=list)
+    expression_replace_names: List[str] = field(default_factory=list)
+    over: Optional[Over] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+        super().validate()
+        if self.expr_string is None or self.type is None:
+            raise DJParseException("Raw requires a name, string and type")
+
+    def __str__(self) -> str:
+        return self.expr_string.format_map(  # type:ignore
+            {
+                expr_replace: str(expr)
+                for expr_replace, expr in zip(
+                    self.expression_replace_names,
+                    self.expressions,
+                )
+            },
+        )  # type:ignore
+
+    def is_aggregation(self) -> bool:
+        return self.is_aggregation_
+
+
+@dataclass(eq=False)
+class IsNull(Operation):
+    """
+    Class representing IS NULL
+    """
+
+    expr: Expression
+
+    def __str__(self) -> str:
+        return f"{(self.expr)} IS NULL"
+
+
+@dataclass(eq=False)  # type: ignore
+class Value(Expression):
+    """
+    Base class for all values number, string, boolean
+    """
+
+    value: Union[str, bool, float, int, None]
+
+    def __str__(self) -> str:
+        if isinstance(self, String):
+            return f"'{self.value}'"
+        return str(self.value)
+
+
+@dataclass(eq=False)
+class Null(Value):
+    """
+    Null value
+    """
+
+    value = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+        super().validate()
+        if self.value is not None:
+            raise DJParseException("NULL does not take a value.")
+
+
+@dataclass(eq=False)
+class Number(Value):
+    """
+    Number value
+    """
+
+    value: Union[float, int]
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+        super().validate()
+        if type(self.value) not in (float, int):
+            try:
+                self.value = int(self.value)
+            except ValueError:
+                self.value = float(self.value)
+
+
+class String(Value):
+    """
+    String value
+    """
+
+    value: str
+
+
+class Boolean(Value):
+    """
+    Boolean True/False value
+    """
+
+    value: bool
+
+
+AliasedType = TypeVar("AliasedType", bound=Node)  # pylint: disable=C0103
+
+
+@dataclass(eq=False)
+class Alias(Named, Generic[AliasedType]):
+    """
+    Wraps node types with an alias
+    """
+
+    child: AliasedType = field(default_factory=Node)  # type: ignore
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.validate()
+
+    def validate(self):
+        super().validate()
+        if isinstance(self.child, Alias):
+            if self.validate_strict:
+                raise DJParseException("An alias cannot descend from another Alias.")
+            self.child = self.child.child
+
+    def replace(  # pylint: disable=invalid-name
+        self,
+        from_: Any,
+        to: Any,
+        compare: Optional[Callable[[Any, Any], bool]] = None,
+        _replace: Optional[Callable[["Node", Any, Any], "Node"]] = None,
+    ) -> "Alias":
+        """
+        Replace a node with another on an Alias
+
+        Note: Replacing in an Alias has different behavior
+            than wrapping one Alias in another
+            when replacing, the inner alias takes the place
+            of the one replacing within
+        """
+        if _replace is None:
+            _replace = Replacer(compare)
+        # pylint: disable=W0212
+        if _replace._compare(from_, self.child) and isinstance(  # type: ignore
+            to,
+            Alias,
+        ):  # pylint: disable=W0212
+            self.name = to.name
+            self.namespace = to.namespace
+            self.child = to.child
+            return to
+        _replace(self, from_, to)
+        return self
+
+    def __str__(self) -> str:
+        return f"{self.child} AS {self.name}"
+
+    def is_aggregation(self) -> bool:
+        return isinstance(self.child, Expression) and self.child.is_aggregation()
+
 
 @dataclass(eq=False)
 class Column(Named):
@@ -610,16 +1149,37 @@ class Column(Named):
     def __str__(self) -> str:
         prefix = ""
         if self.table is not None:
-            return f'{self.table}.{self.name.quote_style}{self.name}{self.name.quote_style}' 
-        return str(self.name)  
+            prefix += "" if not prefix else "."
+            if isinstance(self.table, Alias):
+                prefix += str(self.table.name)
+            elif isinstance(self.table, Table):
+                prefix += str(self.table)
+        else:
+            prefix += "" if self.namespace is None else str(self.namespace)
+        prefix += "." if prefix else ""
+        return prefix + str(self.name)
+
 
 @dataclass(eq=False)
-class Wildcard(Named):
+class MapSubscript(Expression):
+    """
+    Map accessors
+    """
+
+    map_column: "Column"
+    keys: List[Name]
+
+    def __str__(self) -> str:
+        key_chains = "".join([f'["{key}"]' for key in self.keys])
+        return f"{self.map_column}{key_chains}"
+
+
+@dataclass(eq=False)
+class Wildcard(Expression):
     """
     Wildcard or '*' expression
     """
-    
-    name:Name = field(init=False, repr=False, default=Name("*"))
+
     _table: Optional["Table"] = field(repr=False, default=None)
 
     @property
@@ -639,6 +1199,7 @@ class Wildcard(Named):
 
     def __str__(self) -> str:
         return "*"
+
 
 @dataclass(eq=False)
 class Table(Named):
@@ -697,506 +1258,85 @@ class Table(Named):
         return prefix + str(self.name)
 
 
-    
-@dataclass(eq=False)  # type: ignore
-class Aliasable(Expression):
+# pylint: disable=C0103
+class JoinKind(DJEnum):
     """
-    A mixin for Nodes that are aliasable
-    """
-
-    alias: Optional[Name] = None
-
-    @property
-    def name(self):
-        if self.alias is None and isinstance(self, Named):
-            return self.name
-        return self.alias
-
-
-class Operation(Expression):
-    """
-    A type to overarch types that operate on other expressions
+    The accepted kinds of joins
     """
 
+    Inner = "INNER JOIN"
+    LeftOuter = "LEFT JOIN"
+    RightOuter = "RIGHT JOIN"
+    FullOuter = "FULL JOIN"
+    CrossJoin = "CROSS JOIN"
 
-@dataclass(eq=False)
-class UnaryOp(Operation):
-    """
-    An operation that operates on a single expression
-    """
 
-    op: str
-    expr: Expression
+# pylint: enable=C0103
+TableExpression = Union[Table, Alias[Table], "Select", Alias["Select"]]
 
-    def __str__(self) -> str:
-        return f"{self.op} {(self.expr)}"
 
-
-@dataclass(eq=False)
-class BinaryOp(Operation):
-    """
-    Represents an operation that operates on two expressions
-    """
-
-    op: str
-    left: Expression
-    right: Expression
-
-    def __str__(self) -> str:
-        return f"{self.left} {self.op} {self.right}"
-
-
-@dataclass(eq=False)
-class Case(Expression):
-    """
-    A case statement of branches
-    """
-
-    conditions: List[Expression] = field(default_factory=list)
-    else_result: Optional[Expression] = None
-    operand: Optional[Expression] = None
-    results: List[Expression] = field(default_factory=list)
-
-    def __str__(self) -> str:
-        branches = "\n\tWHEN ".join(
-            f"{(cond)} THEN {(result)}"
-            for cond, result in zip(self.conditions, self.results)
-        )
-        return f"""(CASE
-        WHEN {branches}
-        ELSE {(self.else_result)}
-    END)"""
-
-    def is_aggregation(self) -> bool:
-        return all(result.is_aggregation() for result in self.results) and (
-            self.else_result.is_aggregation() if self.else_result else True
-        )
-
-
-@dataclass(eq=False)
-class Over(Expression):
-    """
-    Represents a function used in a statement
-    """
-
-    partition_by: List[Expression] = field(default_factory=list)
-    order_by: List["Order"] = field(default_factory=list)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if not (self.partition_by or self.order_by):
-            raise DJParseException(
-                "An OVER requires at least a PARTITION BY or ORDER BY",
-            )
-
-    def __str__(self) -> str:
-        partition_by = (  # pragma: no cover
-            " PARTITION BY " + ", ".join(str(exp) for exp in self.partition_by)
-            if self.partition_by
-            else ""
-        )
-        order_by = (
-            " ORDER BY " + ", ".join(str(exp) for exp in self.order_by)
-            if self.order_by
-            else ""
-        )
-        consolidated_by = "\n".join(
-            po_by for po_by in (partition_by, order_by) if po_by
-        )
-        return f"OVER ({consolidated_by})"
-
-
-@dataclass(eq=False)
-class Function(Named, Operation):
-    """
-    Represents a function used in a statement
-    """
-
-    args: List[Expression] = field(default_factory=list)
-    quantifier: str = ""
-    over: Optional[Over] = None
-
-    def __str__(self) -> str:
-        over = f" {self.over}" if self.over else ""
-        return f"{self.name}({self.quantifier}{', '.join(str(arg) for arg in self.args)}){over}"
-
-    def is_aggregation(self) -> bool:
-        return function_registry[self.name.name.upper()].is_aggregation
-
-
-@dataclass(eq=False)  # type: ignore
-class Value(Expression):
-    """
-    Base class for all values number, string, boolean
-    """
-
-    value: Union[str, bool, float, int, None]
-
-    def __str__(self) -> str:
-        if isinstance(self, String):
-            return f"'{self.value}'"
-        return str(self.value)
-
-
-@dataclass(eq=False)
-class Null(Value):
-    """
-    Null value
-    """
-
-    value = None
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if self.value is not None:
-            raise DJParseException("NULL does not take a value.")
-
-
-@dataclass(eq=False)
-class Number(Value):
-    """
-    Number value
-    """
-
-    value: Union[float, int]
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if type(self.value) not in (float, int):
-            try:
-                self.value = int(self.value)
-            except ValueError:
-                self.value = float(self.value)
-
-
-class String(Value):
-    """
-    String value
-    """
-
-    value: str
-
-
-class Boolean(Value):
-    """
-    Boolean True/False value
-    """
-
-    value: bool
-
-
-@dataclass(eq=False)
-class Interval(Value):
-    """
-    Interval value
-    """
-
-    value: timedelta
-
-
-@dataclass(eq=False)
-class Predicate(Operation):
-    """
-    Represents a predicate
-    """
-
-    negated: bool = False
-
-
-@dataclass(eq=False)
-class Between(Predicate):
-    """
-    A between statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    low: Expression = field(default_factory=Expression)
-    high: Expression = field(default_factory=Expression)
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        return f"{not_}{self.expr} BETWEEN {self.low} AND {self.high}"
-
-
-@dataclass(eq=False)
-class In(Predicate):
-    """
-    An in expression
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    source: Union[List[Expression], "Select"] = field(default_factory=Expression)
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        source = (
-            str(self.source)
-            if isinstance(self.source, Select)
-            else "(" + ", ".join(str(exp) for exp in self.source) + ")"
-        )
-        return f"{self.expr} {not_}IN {source}"
-
-
-@dataclass(eq=False)
-class Rlike(Predicate):
-    """
-    A regular expression match statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    pattern: Expression = field(default_factory=Expression)
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        return f"{not_}{self.expr} RLIKE {self.pattern}"
-
-
-@dataclass(eq=False)
-class Like(Predicate):
-    """
-    A string pattern matching statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    quantifier: str = ""
-    patterns: List[Expression] = field(default_factory=list)
-    escape_char: Optional[str] = None
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        patterns = ", ".join(str(p) for p in self.patterns)
-        escape_char = f" ESCAPE '{self.escape_char}'" if self.escape_char else ""
-        return f"{not_}{self.expr} LIKE {self.quantifier} ({patterns}){escape_char}"
-
-
-@dataclass(eq=False)
-class IsNull(Predicate):
-    """
-    A null check statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        return f"{self.expr} IS {not_}NULL"
-
-
-@dataclass(eq=False)
-class IsBoolean(Predicate):
-    """
-    A boolean check statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    value: str = "UNKNOWN"
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        return f"{self.expr} IS {not_}{self.value}"
-
-
-@dataclass(eq=False)
-class IsDistinctFrom(Predicate):
-    """
-    A distinct from check statement
-    """
-
-    expr: Expression = field(default_factory=Expression)
-    right: Expression = field(default_factory=Expression)
-
-    def __str__(self) -> str:
-        not_ = "NOT " if self.negated else ""
-        return f"{self.expr} IS {not_}DISTINCT FROM {self.right}"
-
-
-@dataclass(eq=False)
-class Case(Expression):
-    """
-    A case statement of branches
-    """
-
-    conditions: List[Expression] = field(default_factory=list)
-    else_result: Optional[Expression] = None
-    operand: Optional[Expression] = None
-    results: List[Expression] = field(default_factory=list)
-
-    def __str__(self) -> str:
-        branches = "\n\tWHEN ".join(
-            f"{(cond)} THEN {(result)}"
-            for cond, result in zip(self.conditions, self.results)
-        )
-        return f"""(CASE
-        WHEN {branches}
-        ELSE {(self.else_result)}
-    END)"""
-
-    def is_aggregation(self) -> bool:
-        return all(result.is_aggregation() for result in self.results) and (
-            self.else_result.is_aggregation() if self.else_result else True
-        )
-
-
-@dataclass(eq=False)
-class Subscript(Expression):
-    """
-    Represents a subscript expression
-    """
-
-    expr: Expression
-    index: Expression
-
-    def __str__(self) -> str:
-        return f"{self.expr}[{self.index}]"
-
-
-@dataclass(eq=False)
-class Lambda(Expression):
-    """
-    Represents a lambda expression
-    """
-
-    identifiers: List[Named]
-    expr: Expression
-
-    def __str__(self) -> str:
-        id_str = ", ".join(str(iden) for iden in self.identifiers)
-        return f"({id_str}) -> {self.expr}"
-    
-@dataclass(eq=False)
-class JoinCriteria(Node):
-    """
-    Represents the criteria for a join relation in a FROM clause
-    """
-
-    on: Optional[Expression] = None
-    using: Optional[List[Named]] = None
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if self.on is None and self.using is None:
-            raise DJParseException(f"Expected either an ON or USING clause at {self}.")
-        if self.on is not None and self.using is not None:
-            raise DJParseException(
-                f"Expected either an ON or USING clause, not both, at {self}."
-            )
-        if self.on is not None:
-            self.on.validate()
-
-    def __str__(self) -> str:
-        if self.on:
-            return f"ON {self.on}"
-        else:
-            id_list = ", ".join(str(iden) for iden in self.using)
-            return f"USING ({id_list})"
-        
 @dataclass(eq=False)
 class Join(Node):
     """
-    Represents a join relation in a FROM clause
+    A join between tables
     """
 
-    join_type: str
-    table: Expression
-    criteria: Optional[JoinCriteria] = None
+    kind: JoinKind
+    table: TableExpression
+    on: Expression  # pylint: disable=C0103
 
     def __str__(self) -> str:
-        parts = []
-        if self.join_type:
-            parts.append(f"{self.join_type} ")
-        parts.append("JOIN ")
-        parts.append(str(self.table))
-        if self.criteria:
-            parts.append(f" {self.criteria}")
-        return "".join(parts)
+        return f"""{self.kind.value} {self.table}
+        ON {self.on}"""
 
-Lateral=None
-    
+
 @dataclass(eq=False)
 class From(Node):
     """
-    Represents the FROM clause of a SELECT statement
+    A from that belongs to a select
     """
 
-    tables: List[Expression]
+    tables: List[TableExpression]
     joins: List[Join] = field(default_factory=list)
-    laterals: List[Lateral] = field(default_factory=list)
 
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if not self.tables:
-            raise DJParseException(
-                f"Expected at least one table in from clause at {self}."
+    def __str__(self) -> str:
+        if self.tables or self.joins:
+            return (
+                f"FROM {', '.join(str(table) for table in self.tables)}"
+                + "\n"
+                + "\n".join(str(join) for join in self.joins)
             )
-        for table in self.tables:
-            table.validate()
-        for join in self.joins:
-            join.validate()
-
-    def __str__(self) -> str:
-        parts = ["FROM "]
-        parts.append(str(self.tables[0]))
-        for i in range(1, len(self.tables)):
-            parts.append(", ")
-            parts.append(str(self.tables[i]))
-        for join in self.joins:
-            parts.append(f"\n{join}")
-        return "".join(parts)
+        return ""
 
 
 @dataclass(eq=False)
-class FunctionTable(Aliasable, Operation):
-    """
-    Represents a function used in a statement
-    """
-
-    args: List[Expression] = field(default_factory=list)
-
-    def __str__(self) -> str:
-        return f"{self.name}({', '.join(str(arg) for arg in self.args)})"
-
-    
-@dataclass(eq=False)
-class SetOp(Node):
+class Order(Node):
     """
     A column wrapper for ordering
     """
-    
-    kind: str #Union, intersect, ...
-    select: Union["Select", "SetOp"]
-    
+
+    expr: Expression
+    asc: bool = True
 
     def __str__(self) -> str:
-        return f"{self.kind}\n{self.right}"    
+        order = "ASC" if self.asc else "DESC"
+        return f"{self.expr} {order}"
+
 
 @dataclass(eq=False)
-class Select(Aliasable):
+class Select(Expression):  # pylint: disable=R0902
     """
     A single select statement type
     """
 
-    quantifier: str = ""  # Distinct, All
-    projection: List[Expression] = field(default_factory=list)
-    from_: Optional[From] = None
+    from_: From
     group_by: List[Expression] = field(default_factory=list)
     having: Optional[Expression] = None
+    projection: List[Expression] = field(default_factory=list)
     where: Optional[Expression] = None
-    set_op: Optional[SetOp] = None
+    limit: Optional[Number] = None
+    distinct: bool = False
+    order_by: List[Order] = field(default_factory=list)
 
     def __post_init__(self):
         super().__post_init__()
@@ -1206,12 +1346,12 @@ class Select(Aliasable):
         super().validate()
         if not self.projection:
             raise DJParseException(
-                f"Expected at least a single item in projection at {self}."
+                "Expected at least a single item in projection at {self}.",
             )
 
     def add_aliases_to_unnamed_columns(self) -> None:
         """
-        Add an alias to any unnamed columns in the projection (`col{n}`)
+        Add an alias to any unnamed columns in the projection (`_col<n>`)
         """
         for i, expression in enumerate(self.projection):
             if not isinstance(expression, (Column, Alias)):
@@ -1221,59 +1361,26 @@ class Select(Aliasable):
                 self.replace(expression, aliased, lambda a, b: id(a) == id(b))
 
     def __str__(self) -> str:
-        subselect = not (
-            isinstance(self.parent, Query)
-            or self.parent is None
-            or self.alias is not None
-        )
+        subselect = not (isinstance(self.parent, Query) or self.parent is None)
         parts = ["SELECT "]
-        if self.quantifier:
-            parts.append(f"{self.quantifier} ")
-        parts.append(",\n\t".join(str(exp) for exp in self.projection))
-        if self.from_ is not None:
-            parts.extend(("\n", str(self.from_), "\n"))
+        if self.distinct:
+            parts.append("DISTINCT ")
+        projection = ",\n\t".join(str(exp) for exp in self.projection)
+        parts.extend((projection, "\n", str(self.from_), "\n"))
         if self.where is not None:
             parts.extend(("WHERE ", str(self.where), "\n"))
         if self.group_by:
             parts.extend(("GROUP BY ", ", ".join(str(exp) for exp in self.group_by)))
         if self.having is not None:
             parts.extend(("HAVING ", str(self.having), "\n"))
-        if self.set_op is not None:
-            parts.extend((str(self.set_op), "\n"))
-
-        select = " ".join(parts).strip()
+        if self.limit is not None:
+            parts.extend(("LIMIT ", str(self.limit), "\n"))
+        if self.order_by:
+            parts.extend(("ORDER BY ", ", ".join(str(exp) for exp in self.order_by)))
+        select = " ".join(parts)
         if subselect:
             return "(" + select + ")"
         return select
-
-
-@dataclass(eq=False)
-class SortItem(Node):
-    """
-    Defines a sort item of an expression
-    """
-    expr: Expression
-    asc: str
-    nulls: str
-        
-    def __str__(self) -> str:
-        return f"{self.expr} {self.asc} {self.nulls}".strip()
-        
-        
-@dataclass(eq=False)
-class Organization(Node):
-    """
-    A column wrapper for ordering
-    """
-
-    order: List[SortItem]
-    sort: List[SortItem]    
-
-    def __str__(self) -> str:
-        order = f"ORDER BY {', '.join(self.order)}"
-        sort = f"SORT BY {', '.join(self.order)}"
-        return order+"\n"+sort
-    
 
 
 @dataclass(eq=False)
@@ -1282,13 +1389,9 @@ class Query(Expression):
     Overarching query type
     """
 
-    select: Select
-    ctes: List[Select] = field(default_factory=list)
-    limit: Optional[Expression] = None
-    quantifier: str = ""
-    ordering: Organization = field(default_factory=list)
-    sets: List[SetOp] = field(default_factory=list)
-        
+    select: "Select"
+    ctes: List[Alias["Select"]] = field(default_factory=list)
+
     def _to_select(self) -> Select:
         """
         Compile ctes into the select and return the select
@@ -1301,16 +1404,49 @@ class Query(Expression):
             self.select.replace(table, cte)
         return self.select
 
+    def compile(  # pylint: disable=R0913,C0415
+        self,
+        session: Session,
+    ):
+        """
+        Validates Query using DJ metadata and adds the metadata into the Query
+        """
+        from dj.construction.compile import _compile_select_ast
+
+        select = self._to_select()  # pylint: disable=W0212
+        _compile_select_ast(session, select)
+
+    def build(  # pylint: disable=R0913,C0415
+        self,
+        session: Session,
+        build_plan: "BuildPlan",
+        build_plan_depth: int,
+        database: Database,
+        dialect: Optional[str] = None,
+    ):
+        """
+        Transforms a query ast by replacing dj node references with their asts
+        """
+        from dj.construction.build import _build_select_ast
+
+        select = self._to_select()  # pylint: disable=W0212
+        _build_select_ast(
+            session,
+            select,
+            build_plan,
+            build_plan_depth,
+            database,
+            dialect,
+        )
+        select.add_aliases_to_unnamed_columns()
+
     def __str__(self) -> str:
         subquery = bool(self.parent)
-        ctes = ",\n".join(f"{cte.name} AS ({cte.child})" for cte in self.ctes)
+        ctes = ",\n".join(f"{cte.name} AS {(cte.child)}" for cte in self.ctes)
         with_ = "WITH" if ctes else ""
         select = f"({(self.select)})" if subquery else (self.select)
-        parts = [f"{with_}\n{ctes}\n{select}\n"]
-        if self.ordering:
-            order_by = ", ".join(str(item) for item in self.ordering)
-            parts.append(f"ORDER BY {order_by}\n")
-        if self.limit is not None:
-            limit = f"LIMIT {'ALL ' if self.quantifier == 'ALL' else ''}{self.limit}"
-            parts.append(limit)
-        return "".join(parts)
+        return f"""
+            {with_}
+            {ctes}
+            {select}
+        """.strip()
