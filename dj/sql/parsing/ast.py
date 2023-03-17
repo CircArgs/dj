@@ -1,18 +1,19 @@
 """
 Types to represent the DJ AST used as an intermediate representation for DJ operations
 """
+import re
 
 # pylint: disable=R0401,C0302
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
-from datetime import timedelta
 from enum import Enum
 from itertools import chain, zip_longest
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Generic,
     Iterator,
     List,
     Optional,
@@ -458,7 +459,6 @@ class Node(ABC):
         """
 
 
-
 TExpression = TypeVar("TExpression", bound="Expression")  # pylint: disable=C0103
 
 
@@ -511,43 +511,20 @@ class Name(Node):
 
     name: str
     quote_style: str = ""
-    namespace: Optional["Name"] = None
+
+    def to_named_type(self, named_type: Type["Named"]) -> "Named":
+        """
+        Transform the name into a specific Named that only requires a name to create
+        """
+        return named_type(self)
 
     def __str__(self) -> str:
-        namespace = str(self.namespace) + "." if self.namespace else ""
-        return f"{namespace}{self.quote_style}{self.name}{self.quote_style}"  # pylint: disable=C0301
+        return (
+            f"{self.quote_style}{self.name}{self.quote_style}"  # pylint: disable=C0301
+        )
 
 
 TNamed = TypeVar("TNamed", bound="Named")  # pylint: disable=C0103
-
-
-@dataclass(eq=False)  # type: ignore
-class Named(Expression):
-    """
-    An Expression that has a name
-    """
-
-    name: Name
-
-    @property
-    def namespace(self):
-        namespace = []
-        name = self.name
-        while name.namespace:
-            namespace.append(name.namespace)
-            name = name.namespace
-        return namespace[::-1]
-
-    def identifier(self, quotes: bool = True) -> str:
-        if quotes:
-            return str(self.name)
-
-        return ".".join(
-            (
-                *(name.name for name in self.namespace),
-                self.name.name,
-            ),
-        )
 
 
 @dataclass(eq=False)
@@ -595,24 +572,11 @@ class Named(Expression):
     An Expression that has a name
     """
 
-    def __str__(self) -> str:
-        prefix = ""
-        if self.table is not None:
-            return f"{self.table}.{self.name.quote_style}{self.name}{self.name.quote_style}"
-        return str(self.name)
+    name: Name
 
+    namespace: Optional[Namespace] = None
 
-@dataclass(eq=False)
-class Wildcard(Named):
-    """
-    Wildcard or '*' expression
-    """
-
-    name: Name = field(init=False, repr=False, default=Name("*"))
-    _table: Optional["Table"] = field(repr=False, default=None)
-
-    @property
-    def table(self) -> Optional["Table"]:
+    def add_namespace(self: TNamed, namespace: Optional[Namespace]) -> TNamed:
         """
         Add a namespace to the Named if one does not exist
         """
@@ -620,15 +584,12 @@ class Wildcard(Named):
             self.namespace = namespace
         return self
 
-    def __str__(self) -> str:
-        return "*"
-
-
-@dataclass(eq=False)
-class Table(Named):
-    """
-    A type for tables
-    """
+    def alias_or_name(self) -> Name:
+        """
+        Get the alias name of a node if it is the
+        descendant of an alias otherwise get its own name
+        """
+        return self.alias_or_self().name
 
 
 class Operation(Expression):
@@ -651,8 +612,8 @@ class UnaryOpKind(DJEnum):
 # pylint: enable=C0103
 
 
-@dataclass(eq=False)  # type: ignore
-class Aliasable(Expression):
+@dataclass(eq=False)
+class UnaryOp(Operation):
     """
     An operation that operates on a single expression
     """
@@ -1290,12 +1251,15 @@ class Table(Named):
         return self
 
     def __str__(self) -> str:
-        id_str = ", ".join(str(iden) for iden in self.identifiers)
-        return f"({id_str}) -> {self.expr}"
+        prefix = str(self.namespace) if self.namespace else ""
+        if prefix:
+            prefix += "."
+
+        return prefix + str(self.name)
 
 
-@dataclass(eq=False)
-class JoinCriteria(Node):
+# pylint: disable=C0103
+class JoinKind(DJEnum):
     """
     The accepted kinds of joins
     """
@@ -1307,22 +1271,8 @@ class JoinCriteria(Node):
     CrossJoin = "CROSS JOIN"
 
 
-    def validate(self):
-        if self.on is None and self.using is None:
-            raise DJParseException(f"Expected either an ON or USING clause at {self}.")
-        if self.on is not None and self.using is not None:
-            raise DJParseException(
-                f"Expected either an ON or USING clause, not both, at {self}.",
-            )
-        if self.on is not None:
-            self.on.validate()
-
-    def __str__(self) -> str:
-        if self.on:
-            return f"ON {self.on}"
-        else:
-            id_list = ", ".join(str(iden) for iden in self.using)
-            return f"USING ({id_list})"
+# pylint: enable=C0103
+TableExpression = Union[Table, Alias[Table], "Select", Alias["Select"]]
 
 
 @dataclass(eq=False)
@@ -1340,9 +1290,6 @@ class Join(Node):
         ON {self.on}"""
 
 
-Lateral = None
-
-
 @dataclass(eq=False)
 class From(Node):
     """
@@ -1352,14 +1299,12 @@ class From(Node):
     tables: List[TableExpression]
     joins: List[Join] = field(default_factory=list)
 
-    def __post_init__(self):
-        super().__post_init__()
-        self.validate()
-
-    def validate(self):
-        if not self.tables:
-            raise DJParseException(
-                f"Expected at least one table in from clause at {self}.",
+    def __str__(self) -> str:
+        if self.tables or self.joins:
+            return (
+                f"FROM {', '.join(str(table) for table in self.tables)}"
+                + "\n"
+                + "\n".join(str(join) for join in self.joins)
             )
         return ""
 
@@ -1378,22 +1323,8 @@ class Order(Node):
         return f"{self.expr} {order}"
 
 
-
 @dataclass(eq=False)
 class Select(Expression):  # pylint: disable=R0902
-    """
-    A column wrapper for ordering
-    """
-
-    kind: str  # Union, intersect, ...
-    select: Union["Select", "SetOp"]
-
-    def __str__(self) -> str:
-        return f"{self.kind}\n{self.right}"
-
-
-@dataclass(eq=False)
-class Select(Aliasable):
     """
     A single select statement type
     """
@@ -1415,7 +1346,7 @@ class Select(Aliasable):
         super().validate()
         if not self.projection:
             raise DJParseException(
-                f"Expected at least a single item in projection at {self}.",
+                "Expected at least a single item in projection at {self}.",
             )
 
     def add_aliases_to_unnamed_columns(self) -> None:
@@ -1453,46 +1384,13 @@ class Select(Aliasable):
 
 
 @dataclass(eq=False)
-class SortItem(Node):
-    """
-    Defines a sort item of an expression
-    """
-
-    expr: Expression
-    asc: str
-    nulls: str
-
-    def __str__(self) -> str:
-        return f"{self.expr} {self.asc} {self.nulls}".strip()
-
-
-@dataclass(eq=False)
-class Organization(Node):
-    """
-    A column wrapper for ordering
-    """
-
-    order: List[SortItem]
-    sort: List[SortItem]
-
-    def __str__(self) -> str:
-        order = f"ORDER BY {', '.join(self.order)}"
-        sort = f"SORT BY {', '.join(self.order)}"
-        return order + "\n" + sort
-
-
-@dataclass(eq=False)
 class Query(Expression):
     """
     Overarching query type
     """
 
-    select: Select
-    ctes: List[Select] = field(default_factory=list)
-    limit: Optional[Expression] = None
-    quantifier: str = ""
-    ordering: Organization = field(default_factory=list)
-    sets: List[SetOp] = field(default_factory=list)
+    select: "Select"
+    ctes: List[Alias["Select"]] = field(default_factory=list)
 
     def _to_select(self) -> Select:
         """
@@ -1547,11 +1445,8 @@ class Query(Expression):
         ctes = ",\n".join(f"{cte.name} AS {(cte.child)}" for cte in self.ctes)
         with_ = "WITH" if ctes else ""
         select = f"({(self.select)})" if subquery else (self.select)
-        parts = [f"{with_}\n{ctes}\n{select}\n"]
-        if self.ordering:
-            order_by = ", ".join(str(item) for item in self.ordering)
-            parts.append(f"ORDER BY {order_by}\n")
-        if self.limit is not None:
-            limit = f"LIMIT {'ALL ' if self.quantifier == 'ALL' else ''}{self.limit}"
-            parts.append(limit)
-        return "".join(parts)
+        return f"""
+            {with_}
+            {ctes}
+            {select}
+        """.strip()
