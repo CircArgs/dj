@@ -1356,14 +1356,12 @@ class Select(TableExpression):
 
         select = " ".join(parts).strip()
 
-        if not self.parenthesized:
-            return select
-        
-        if subselect:
-            return "(" + select + ")"
+        if self.parenthesized:
+            select = f"({select})"
         
         if self.alias:
-            return f"({select}) {self.alias}"
+            as_=" AS " if self.as_ else " "
+            return f"{select}{as_}{self.alias}"
         return select
 
 
