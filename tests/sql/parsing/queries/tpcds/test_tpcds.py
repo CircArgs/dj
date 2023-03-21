@@ -413,6 +413,31 @@ def test_tpcds_circular_parse(query_file, request, monkeypatch):
             if not query.isspace():
                 query_ast = parse_antlr4_to_ast(query)
                 parse_statement(str(query_ast))
+                # Below print statements show up when you include --capture=tee-sys
+                # These are helpful when you want to visually compare the query outputs
+                print("""
+
+
+
+                """)
+                print(f"""
+
+                    ### ORIGINAL QUERY {query_file} ###
+
+                """)
+                print(query)
+                print("""
+
+                    ### DJ AST __str__ ###
+
+                """)
+                print(query_ast)
+                print("""
+
+
+
+                """)
+
 
 
 @pytest.mark.skipif("not config.getoption('tpcds')")
