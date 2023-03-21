@@ -476,9 +476,14 @@ class Aliasable(Node):
     """
 
     alias: Optional["Name"] = None
+    as_: bool = False
 
     def set_alias(self: TNode, alias: "Name") -> TNode:
         self.alias = alias
+        return self
+
+    def set_as(self: TNode, as_: bool) -> TNode:
+        self.as_ = as_
         return self
 
     @property
