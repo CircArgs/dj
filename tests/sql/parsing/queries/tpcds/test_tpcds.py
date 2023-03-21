@@ -432,7 +432,7 @@ def test_tpcds_circular_parse(query_file, request, monkeypatch):
                     ### DJ AST __str__ ###
 
                 """)
-                print(sqlparse.format(str(query_ast), reindent=True, reindent_aligned=True, keyword_case="upper"))
+                print(sqlparse.format(str(query_ast), reindent=True, keyword_case="upper"))
                 print("""
 
 
