@@ -505,7 +505,8 @@ class Alias(Aliasable, Generic[AliasedType]):
     child: AliasedType = field(default_factory=Node)  # type: ignore
 
     def __str__(self) -> str:
-        return f"{self.child} AS {self.alias}"
+        as_=" AS " if self.as_ else " "
+        return f"{self.child}{as_}{self.alias}"
 
     def is_aggregation(self) -> bool:
         return isinstance(self.child, Expression) and self.child.is_aggregation()
