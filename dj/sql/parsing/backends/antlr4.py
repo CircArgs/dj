@@ -180,8 +180,9 @@ class Visitor:
         if result is None:
             line, col = ctx.start.line, ctx.start.column
             raise DJParseException(f"{line}:{col} Could not parse {ctx.getText()}")
-        if result.parenthesized is None:
+        if hasattr(result, "parenthesized") and result.parenthesized is None:
             if text := ctx.getText():
+                text = text.strip()
                 if (text[0]=="(") and (text[-1]==")"):
                     result.parenthesized=True
         return result
@@ -741,7 +742,6 @@ def _(ctx: sbp.WhenClauseContext)->Tuple[ast.Expression, ast.Expression]:
 @visit.register
 def _(ctx: sbp.ParenthesizedExpressionContext)->ast.Expression:
     expr = visit(ctx.expression())
-    expr.parenthesized = True
     return expr
 
 @visit.register
