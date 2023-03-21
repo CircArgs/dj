@@ -5,6 +5,7 @@ test parsing tpcds queries into DJ ASTs
 from difflib import SequenceMatcher
 
 import pytest
+import sqlparse
 
 from dj.sql.parsing.backends.antlr4 import parse as parse_antlr4_to_ast, parse_statement
 from dj.sql.parsing.backends.sqloxide import parse
@@ -425,13 +426,13 @@ def test_tpcds_circular_parse(query_file, request, monkeypatch):
                     ### ORIGINAL QUERY {query_file} ###
 
                 """)
-                print(query)
+                print(sqlparse.format(query, reindent=True, keyword_case="upper"))
                 print("""
 
                     ### DJ AST __str__ ###
 
                 """)
-                print(query_ast)
+                print(sqlparse.format(str(query_ast), reindent=True, reindent_aligned=True, keyword_case="upper"))
                 print("""
 
 
