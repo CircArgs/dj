@@ -476,7 +476,7 @@ class Aliasable(Node):
     """
 
     alias: Optional["Name"] = None
-    as_: bool = False
+    as_: Optional[bool] = None
 
     def set_alias(self: TNode, alias: "Name") -> TNode:
         self.alias = alias

@@ -185,6 +185,8 @@ class Visitor:
                 text = text.strip()
                 if (text[0]=="(") and (text[-1]==")"):
                     result.parenthesized=True
+        if hasattr(ctx, "AS") and ctx.AS() and hasattr(result, "as_") and result.as_ is None:
+            result = result.set_as(True)
         return result
 
 
