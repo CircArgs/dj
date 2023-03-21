@@ -350,15 +350,12 @@ def compare_parse_trees(tree1, tree2):
     # If all checks passed, the trees are equal
     return True
 
-AS_RE = re.compile(r'\sAS\s|\sas\s')
 
 def compare_query_strings(str1, str2):
     """
     Recursively compare two ANTLR parse trees for equality, ignoring certain elements.
     """
 
-    str1 = AS_RE.sub(" ", str1)
-    str2 = AS_RE.sub(" ", str2)
     tree1 = parse_statement(str1)
     tree2 = parse_statement(str2)
     
@@ -438,6 +435,7 @@ def test_tpcds_circular_parse(query_file, request, monkeypatch):
 
 
                 """)
+                assert sqlparse.format(query, reindent=True, keyword_case="upper") == sqlparse.format(str(query_ast), reindent=True, keyword_case="upper")
 
 
 
