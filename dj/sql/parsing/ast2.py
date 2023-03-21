@@ -520,7 +520,7 @@ class Expression(Node):
     An expression type simply for type checking
     """
 
-    parenthesized: bool = field(init=False, default = False)
+    parenthesized: Optional[bool] = field(init=False, default = None)
 
     @property
     def type(self) -> ColumnType:

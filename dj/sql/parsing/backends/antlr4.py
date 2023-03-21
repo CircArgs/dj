@@ -149,6 +149,8 @@ def tree_to_strings(tree, indent=0):
             result += tree_to_strings(child, indent + 1)
     return result
 
+TERMINAL_NODE = antlr4.tree.Tree.TerminalNodeImpl
+
 class Visitor:
     def __init__(self):
         self.registry = {}
@@ -168,7 +170,7 @@ class Visitor:
         return func
 
     def __call__(self, ctx):
-        if type(ctx) == antlr4.tree.Tree.TerminalNodeImpl:
+        if type(ctx) == TERMINAL_NODE:
             return None
         func = self.registry.get(type(ctx), None)
         if func is None:
@@ -178,7 +180,10 @@ class Visitor:
         if result is None:
             line, col = ctx.start.line, ctx.start.column
             raise DJParseException(f"{line}:{col} Could not parse {ctx.getText()}")
-
+        if result.parenthesized is None:
+            if text := ctx.getText():
+                if (text[0]=="(") and (text[-1]==")"):
+                    result.parenthesized=True
         return result
 
 
