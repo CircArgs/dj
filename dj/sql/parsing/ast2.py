@@ -1282,7 +1282,7 @@ class SetOp(Node):
     table: Union[TableExpression, "SetOp"]
 
     def __str__(self) -> str:
-        return f"{self.kind}\n({self.table})"
+        return f"{self.kind}\n{self.table}"
 
 
 @dataclass(eq=False)

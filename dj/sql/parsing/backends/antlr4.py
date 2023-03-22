@@ -693,7 +693,6 @@ def _(ctx: sbp.SubqueryExpressionContext):
 def _(ctx: sbp.SetOperationContext):
     left = visit(ctx.left)
     right = visit(ctx.right)
-    right.parenthesized = False
     operator = ctx.operator.text
     quantifier = f" {visit(ctx.setQuantifier())}" if ctx.setQuantifier() else ""
     set_op = ast.SetOp(kind=f"{operator}{quantifier}", table=right)
