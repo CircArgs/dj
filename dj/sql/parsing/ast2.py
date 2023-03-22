@@ -1333,11 +1333,6 @@ class Select(TableExpression):
         self.projection = projection
 
     def __str__(self) -> str:
-        subselect = not (
-            isinstance(self.parent, Query)
-            or self.parent is None
-            or self.alias is not None
-        )
         parts = ["SELECT "]
         if self.quantifier:
             parts.append(f"{self.quantifier}\n")
