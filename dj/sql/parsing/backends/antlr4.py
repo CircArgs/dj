@@ -706,7 +706,7 @@ def _(ctx: sbp.AliasedQueryContext)->ast.Select:
     query = visit(ctx.query())
     select = query.select
     select = select.set_alias(ident)
-    # select.parenthesized = True
+    select.parenthesized = True
     return select
 
 @visit.register
