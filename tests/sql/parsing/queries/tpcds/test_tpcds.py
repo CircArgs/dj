@@ -435,8 +435,25 @@ def test_tpcds_circular_parse(query_file, request, monkeypatch):
 
 
                 """)
-                assert sqlparse.format(query, reindent=True, keyword_case="upper") == sqlparse.format(str(query_ast), reindent=True, keyword_case="upper")
 
+
+@pytest.mark.skipif("not config.getoption('tpcds')")
+@pytest.mark.parametrize(
+    "query_file",
+    spark_tpcds_files,
+)
+def test_tpcds_circular_parse_and_compare(query_file, request, monkeypatch):
+    """
+    Compare the string representation of TPCDS DJ ASTs to the original query
+    """
+    monkeypatch.chdir(request.fspath.dirname)
+    with open(query_file, encoding="UTF-8") as file:
+        content = file.read()
+        for query in content.split(";"):
+            if not query.isspace():
+                query_ast = parse_antlr4_to_ast(query)
+                parse_statement(str(query_ast))
+                assert sqlparse.format(query, reindent=True, keyword_case="upper") == sqlparse.format(str(query_ast), reindent=True, keyword_case="upper")
 
 
 @pytest.mark.skipif("not config.getoption('tpcds')")
