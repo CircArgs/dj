@@ -953,6 +953,295 @@ EXAMPLES = (  # type: ignore
             "name": "total_profit",
         },
     ),
+    ( # Bodega Salon
+        "/nodes/source/",
+        {
+            "columns": {
+                "call_id": {"type": "INT"},
+                "call_start": {"type": "TIMESTAMP"},
+                "call_end": {"type": "TIMESTAMP"},
+                "rep": {"type": "STR"},
+                "customer_id": {"type": "INT"},
+                "notes_id": {"type": "INT"},
+                "category": {"type": "STR"},
+            },
+            "description": "(1) Incoming customer service calls",
+            "mode": "published",
+            "name": "incoming_customer_service",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "incoming_customer_service",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "call_id": {"type": "INT"},
+                "call_start": {"type": "TIMESTAMP"},
+                "call_end": {"type": "TIMESTAMP"},
+                "rep": {"type": "STR"},
+                "customer_id": {"type": "INT"},
+                "notes_id": {"type": "INT"},
+                "category": {"type": "STR"},
+            },
+            "description": "(2) Outgoing customer service calls",
+            "mode": "published",
+            "name": "outgoing_customer_service",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "outgoing_customer_service",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "customer_d": {"type": "INT"},
+                "first_name": {"type": "STR"},
+                "last_name": {"type": "STR"},
+            },
+            "description": "(3) Customer data",
+            "mode": "published",
+            "name": "customer_d",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "customer_d",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "purchase_id": {"type": "INT"},
+                "item_id": {"type": "INT"},
+                "item_type": {"type": "STR"},
+                "account_id": {"type": "INT"},
+                "purchase_country": {"type": "STR"},
+                "purchase_time": {"type": "TIMESTAMP"},
+            },
+            "description": "(4) Purchase data",
+            "mode": "published",
+            "name": "purchase_events",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "purchase_events",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "account_id": {"type": "INT"},
+                "account_type": {"type": "STR"},
+                "customer_id": {"type": "INT"},
+                "home_country": {"type": "STR"},
+            },
+            "description": "(5) Customer accounts",
+            "mode": "published",
+            "name": "customer_accounts",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "customer_accounts",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "service_item_id": {"type": "INT"},
+                "description": {"type": "STR"},
+                "category": {"type": "STR"},
+                "price": {"type": "FLOAT"},
+            },
+            "description": "(6) Services for purchase",
+            "mode": "published",
+            "name": "service_items",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "service_items",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "membership_id": {"type": "INT"},
+                "item_id": {"type": "INT"},
+                "discount": {"type": "fLOAT"},
+            },
+            "description": "(9) Item discounts for memberships",
+            "mode": "published",
+            "name": "membership_discounts",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "membership_discounts",
+        },
+    ),
+    (
+        "/nodes/source/",
+        {
+            "columns": {
+                "consumable_item_id": {"type": "INT"},
+                "description": {"type": "STR"},
+                "category": {"type": "STR"},
+                "price": {"type": "FLOAT"},
+            },
+            "description": "(7) Consumables for purchase",
+            "mode": "published",
+            "name": "consumable_items",
+            "catalog": "default",
+            "schema_": "public",
+            "table": "consumable_items",
+        },
+    ),
+    (
+        "/nodes/transform/",
+        {
+            "description": "(10) Incoming and outgoing customer service calls",
+            "query": """
+                select call_id, 'incoming' as direction, call_start, call_end, rep, customer_id, notes_id, category from incoming_customer_service
+                -- union
+                -- select call_id, 'outgoing' as direction, call_start, call_end, rep, customer_id, notes_id, category from outgoing_customer_service
+            """,
+            "mode": "published",
+            "name": "incoming_and_outgoing_calls",
+            "type": "transform",
+        },
+    ),
+    (
+        "/nodes/transform/",
+        {
+            "description": "(11) Calls enriched with most recently purchased item",
+            "query": """
+                with purchase_events_with_customer_id as (
+                    select
+                        pe.account_id
+                        ,pe.item_id
+                        ,pe.purchase_country
+                        ,pe.purchase_time
+                        ,ca.customer_id
+                    from purchase_events pe
+                    left join customer_accounts ca
+                    on pe.account_id = ca.account_id
+                )
+                select distinct
+                    calls.call_id
+                    ,calls.direction
+                    ,calls.call_start
+                    ,calls.call_end
+                    ,calls.rep
+                    ,calls.customer_id
+                    ,calls.notes_id
+                    ,calls.category
+                    ,most_recent_purchase.customer_id
+                    ,most_recent_purchase.item_id
+                    ,most_recent_purchase.purchase_country
+                from incoming_and_outgoing_calls calls
+                left join customer_accounts ca
+                on calls.customer_id = ca.customer_id
+                left join (
+                    select customer_id, item_id, purchase_country
+                    from purchase_events_with_customer_id pe1
+                    where purchase_time = (
+                        select max(purchase_time) from purchase_events_with_customer_id pe2 where pe1.customer_id = pe2.customer_id
+                    )
+                ) most_recent_purchase
+                on ca.customer_id = most_recent_purchase.customer_id
+            """,
+            "mode": "published",
+            "name": "calls_with_most_recent_purchase",
+            "type": "transform",
+        },
+    ),
+    (
+        "/nodes/dimension/",
+        {
+            "description": "(13) Customers",
+            "query": """
+                select customer_id, first_name, last_name from customer_d
+            """,
+            "mode": "published",
+            "name": "customer",
+        },
+    ),
+    (
+        "/nodes/dimension/",
+        {
+            "description": "(14) Countries",
+            "query": """
+            select country_abbreviation, most_recent_item
+            from (
+                select purchase_country as country_abbreviation, item_id as most_recent_item
+                from purchase_events pe1
+                where purchase_time = (
+                    select max(purchase_time) from purchase_events pe2 where pe1.purchase_country = pe2.purchase_country
+                )
+            ) c
+            """,
+            "mode": "published",
+            "name": "country",
+        },
+    ),
+    (
+        "/nodes/dimension/",
+        {
+            "description": "(15) Items",
+            "query": """
+                select distinct service_item_id as item_id, 'service' as type, description, category, price
+                from service_items
+                -- union
+                -- select distinct consumable_item_id as item_id, 'consumable' as type, description, category, price
+                -- from consumable_items
+            """,
+            "mode": "published",
+            "name": "item",
+        },
+    ),
+    (
+        "/nodes/metric/",
+        {
+            "description": "(16) Average length of customer service calls",
+            "query": """
+                select avg(call_end - call_start) as average_call_time from calls_with_most_recent_purchase
+            """,
+            "mode": "published",
+            "name": "average_number_of_calls",
+        },
+    ),
+    (
+        "/nodes/metric/",
+        {
+            "description": "(17) Total length of customer service calls",
+            "query": """
+                select sum(call_end - call_start) as total_call_time from calls_with_most_recent_purchase
+            """,
+            "mode": "published",
+            "name": "total_number_of_calls",
+        },
+    ),
+    (
+        "/nodes/metric/",
+        {
+            "description": "(18) Total number of items with member discounts",
+            "query": """
+                select count(distinct item_id) as num_discounted_items from membership_discounts
+            """,
+            "mode": "published",
+            "name": "number_of_discounted_items",
+        },
+    ),
+    (
+        "/nodes/metric/",
+        {
+            "description": "(19) Average item discount",
+            "query": """
+                select avg(discount) as avg_discount from membership_discounts
+            """,
+            "mode": "published",
+            "name": "average_item_discount",
+        },
+    ),
 )
 
 
