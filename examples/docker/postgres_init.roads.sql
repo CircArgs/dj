@@ -267,3 +267,169 @@ CREATE TABLE roads.municipality_type (
 );
 INSERT INTO roads.municipality_type VALUES ('A', 'Primary');
 INSERT INTO roads.municipality_type VALUES ('A', 'Secondary');
+
+-- Bodega Salon
+create schema if not exists bodegasalon;
+
+drop table if exists bodegasalon.incoming_customer_service;
+drop table if exists bodegasalon.outgoing_customer_service;
+drop table if exists bodegasalon.customer_d;
+drop table if exists bodegasalon.purchase_events;
+drop table if exists bodegasalon.customer_accounts;
+drop table if exists bodegasalon.service_items;
+drop table if exists bodegasalon.consumable_items;
+drop table if exists bodegasalon.membership_discounts;
+
+create table incoming_customer_service (
+    call_id int,
+    call_start timestamp,
+    call_end timestamp,
+    rep varchar,
+    customer_id int,
+    notes_id int,
+    category varchar
+);
+
+insert into incoming_customer_service values
+(1, now()::timestamp - interval '1 hours', now(), 'Peter Davidson', 1, 1, 'billing'),
+(2, now()::timestamp - interval '2 hours', now(), 'Siena Shannon', 2, 2, 'technical'),
+(3, now()::timestamp - interval '3 hours', now(), 'Melissa Richards', 2, 3, 'technical'),
+(4, now()::timestamp - interval '4 hours', now(), 'Billy Poole', 2, 4, 'technical'),
+(5, now()::timestamp - interval '5 hours', now(), 'Dominic Mason', 1, 5, 'billing');
+
+
+create table outgoing_customer_service (
+    call_id int,
+    call_start timestamp,
+    call_end timestamp,
+    rep varchar,
+    customer_id int,
+    notes_id int,
+    category varchar
+);
+insert into outgoing_customer_service values
+(1, now()::timestamp - interval '1 hours', now(), 'Carolyn Gregory', 1, 1, 'billing'),
+(2, now()::timestamp - interval '2 hours', now(), 'Camila Mcknight', 1, 2, 'billing'),
+(3, now()::timestamp - interval '3 hours', now(), 'Erin Taylor', 1, 3, 'billing'),
+(4, now()::timestamp - interval '4 hours', now(), 'Darian Miller', 1, 4, 'billing'),
+(5, now()::timestamp - interval '5 hours', now(), 'Heath Hendricks', 2, 5, 'technical');
+
+create table customer_d (
+    customer_id int,
+    first_name varchar,
+    last_name varchar
+);
+insert into customer_d values
+(1, 'Fry', 'Jacobson'),
+(2, 'Morty', 'Michaels');
+
+create table purchase_events (
+    purchase_id int,
+    item_id int,
+    item_type varchar,
+    account_id int,
+    purchase_country varchar,
+    purchase_time timestamp
+);
+insert into purchase_events values
+(1, 4, 'consumable', 1, 'US', now()::timestamp - interval '1 hours'),
+(2, 5, 'consumable', 2, 'CA', now()::timestamp - interval '2 hours'),
+(3, 4, 'salon', 2, 'CA', now()::timestamp - interval '3 hours'),
+(4, 4, 'salon', 1, 'US', now()::timestamp - interval '4 hours'),
+(5, 4, 'salon', 3, 'UK', now()::timestamp - interval '5 hours'),
+(6, 4, 'salon', 3, 'FR', now()::timestamp - interval '6 hours'),
+(7, 4, 'salon', 2, 'UK', now()::timestamp - interval '7 hours'),
+(8, 4, 'consumable', 2, 'UK', now()::timestamp - interval '8 hours'),
+(9, 4, 'consumable', 1, 'US', now()::timestamp - interval '9 hours'),
+(10, 4, 'salon', 1, 'CA', now()::timestamp - interval '10 hours');
+
+create table customer_accounts (
+    account_id int,
+    account_type varchar,
+    customer_id int,
+    home_country varchar
+);
+insert into customer_accounts values
+(1, 'preloaded', 1, 'US'),
+(2, 'preloaded', 1, 'US'),
+(3, 'debit', 2, 'UK');
+
+create table service_items (
+    service_item_id int,
+    description varchar,
+    category varchar,
+    price decimal
+);
+insert into service_items values
+(1, 'Blow dry', 'salon', 60.0),
+(2, 'Change of Polish', 'salon', 10.0),
+(3, 'Regular Manicure', 'salon', 20.0),
+(4, 'Eyebrows', 'salon', 40.0),
+(5, 'Full Makeup', 'salon', 100.0),
+(6, 'Highlights', 'salon', 150.0),
+(7, 'Gloss', 'salon', 75.0),
+(8, 'Updos', 'salon', 100.0),
+(9, 'Haircut', 'salon', 80.0),
+(10, 'Keratin Conditioning', 'salon', 350.0);
+
+create table consumable_items (
+    consumable_item_id int,
+    description varchar,
+    category varchar,
+    price decimal
+);
+insert into consumable_items values
+(1, 'Kirkland Signature All Chocolate Bag, 90 oz','food', 21.99),
+(2, 'The Fruit Companys Columbia River Fruit Basket','food', 69.99),
+(3, 'Pendleton Pet Kuddler Bed','pets', 59.99),
+(4, 'Planters Dry Roasted Peanuts, 52 oz','food', 6.59),
+(5, 'Pierre Signatures Angus Cheeseburger, 6.2 oz, 8-count','food', 14.99),
+(6, 'Chefs Banquet One Month Emergency Food Supply (380 Total Servings)','food', 139.99),
+(7, 'Tide Pods HE Laundry Detergent Pods, Free & Gentle, 152-count','cleaning', 30.99),
+(8, 'Clorox ToiletWand Disposable Toilet Cleaning System with 36 Refills','cleaning', 18.29),
+(9, 'St Michel Madeleine, Classic French Sponge Cake 100 - count','food', 37.99),
+(10, 'Nescafé Tasters Choice Decaf House Blend Instant Coffee, 14 oz','food', 17.99),
+(11, 'Scoop Away Complete Performance, Scented Cat Litter, 42 Pounds','pets', 18.89),
+(12, 'Honey Bunches of Oats with Almonds Cereal, 50 oz','food', 7.19),
+(13, 'Nature Valley Sweet and Salty Granola Bar, Peanut, 1.2 oz, 48-count','food', 14.49),
+(14, 'Zoe Super Bars Beef Recipe 2/2lb Bags','food', 29.99),
+(15, 'Crest 3D White Advanced Whitening Toothpaste, 5.2 oz, 5-count','food', 13.99);
+
+create table membership_discounts (
+    membership_id int,
+    item_id int,
+    discount decimal
+);
+insert into membership_discounts values
+(1, 1, 0.5),
+(1, 2, 0.5),
+(1, 3, 0.5),
+(1, 4, 0.5),
+(1, 5, 0.5),
+(1, 6, 0.5),
+(1, 7, 0.5),
+(1, 8, 0.5),
+(1, 9, 0.5),
+(1, 10, 0.5),
+(1, 11, 0.5),
+(1, 12, 0.5),
+(1, 13, 0.5),
+(1, 14, 0.5),
+(1, 15, 0.5),
+(2, 1, 0.1),
+(2, 2, 0.1),
+(2, 3, 0.1),
+(2, 4, 0.1),
+(2, 5, 0.1),
+(2, 6, 0.1),
+(2, 7, 0.1),
+(2, 8, 0.1),
+(2, 9, 0.1),
+(2, 10, 0.1),
+(2, 11, 0.1),
+(2, 12, 0.1),
+(2, 13, 0.1),
+(2, 14, 0.1),
+(2, 15, 0.1),
+(3, 3, 0.3),
+(3, 10, 0.3);
