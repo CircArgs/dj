@@ -27,7 +27,7 @@ from dj.models.engine import Dialect, Engine, EngineInfo, EngineRef
 from dj.models.tag import Tag, TagNodeRelationship
 from dj.sql.parsing.types import ColumnType
 from dj.typing import UTCDatetime
-from dj.utils import Version, amenable_name
+from dj.utils import Version, amenable_name, get_session
 
 DEFAULT_DRAFT_VERSION = Version(major=0, minor=1)
 DEFAULT_PUBLISHED_VERSION = Version(major=1, minor=0)
@@ -251,7 +251,13 @@ class AvailabilityState(AvailabilityStateBase, table=True):  # type: ignore
         # Criteria to determine if an availability state should be used needs to be added
         return True
 
-
+class NodeAccess(BaseSQLModel, table=True):
+    """
+    Access keys for a node.
+    """
+    node_id: int = Field(foreign_key="node.id", ondelete="CASCADE")
+    token: str = Field(index=True, primary_key=True)
+    
 class NodeAvailabilityState(BaseSQLModel, table=True):  # type: ignore
     """
     Join table for availability state
@@ -288,6 +294,12 @@ class Node(NodeBase, table=True):  # type: ignore
 
     id: Optional[int] = Field(default=None, primary_key=True)
     namespace: Optional[str] = "default"
+    access: List[NodeAccess] = Relationship(
+        back_populates="node",
+        sa_relationship_kwargs={
+            "primaryjoin": "Access.node_id==Node.id",
+        }
+    )
     current_version: str = Field(default=str(DEFAULT_DRAFT_VERSION))
     created_at: UTCDatetime = Field(
         sa_column=SqlaColumn(DateTime(timezone=True)),
@@ -327,8 +339,15 @@ class Node(NodeBase, table=True):  # type: ignore
         },
     )
 
+    def token_has_access(self, token: str) -> bool:
+        with next(get_session()) as session:
+            query = session.select(NodeAccess).where(NodeAccess.node_id == self.id).where(NodeAccess.token == token)
+            access = query.first()
+            return access is not None
+
     def __hash__(self) -> int:
         return hash(self.id)
+
 
 
 class MaterializationConfig(BaseSQLModel, table=True):  # type: ignore
