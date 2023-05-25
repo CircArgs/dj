@@ -251,11 +251,18 @@ class AvailabilityState(AvailabilityStateBase, table=True):  # type: ignore
         # Criteria to determine if an availability state should be used needs to be added
         return True
 
-class NodeAccess(BaseSQLModel, table=True):
+class AccessType(enum.Enum):
+    NODE_SQL_ACCESS="NODE_SQL_ACCESS"
+    NODE_DATA_ACCESS="NODE_DATA_ACCESS"
+    NODE_CREATE_ACCESS="NODE_CREATE_ACCESS"
+    
+
+class Access(BaseSQLModel, table=True):
     """
-    Access keys for a node.
+    Access keys look-up whether a token can perform a certain access type.
     """
-    node_id: int = Field(foreign_key="node.id", ondelete="CASCADE")
+    type: AccessType = Field(sa_column=SqlaColumn(Enum(AccessType)))
+    node_id: Optional[int] = Field(foreign_key="node.id", ondelete="CASCADE")
     token: str = Field(index=True, primary_key=True)
     
 class NodeAvailabilityState(BaseSQLModel, table=True):  # type: ignore
@@ -339,11 +346,11 @@ class Node(NodeBase, table=True):  # type: ignore
         },
     )
 
-    def token_has_access(self, token: str) -> bool:
+    def access_node(self, token: str) -> List[Access]:
         with next(get_session()) as session:
-            query = session.select(NodeAccess).where(NodeAccess.node_id == self.id).where(NodeAccess.token == token)
-            access = query.first()
-            return access is not None
+            query = session.select(Access).where(Access.node_id == self.id).where(Access.token == token)
+            access = query.all()
+            return access
 
     def __hash__(self) -> int:
         return hash(self.id)
